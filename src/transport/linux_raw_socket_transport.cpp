@@ -582,6 +582,47 @@ bool LinuxRawSocketTransport::sdoUpload(std::uint16_t slavePosition, const SdoAd
         return false;
     }
     const auto adp = toAutoIncrementAddress(slavePosition);
+    std::uint16_t writeOffset = mailboxWriteOffset_;
+    std::uint16_t writeSize = mailboxWriteSize_;
+    std::uint16_t readOffset = mailboxReadOffset_;
+    std::uint16_t readSize = mailboxReadSize_;
+
+    auto readSmWindow = [&](std::uint8_t smIndex, std::uint16_t& outStart, std::uint16_t& outLen) -> bool {
+        const auto currentIndex = datagramIndex_++;
+        EthercatDatagramRequest req;
+        req.command = kCommandAprd;
+        req.datagramIndex = currentIndex;
+        req.adp = adp;
+        req.ado = static_cast<std::uint16_t>(kRegisterSmBase + (smIndex * 8U));
+        req.payload.assign(8U, 0U);
+
+        std::uint16_t wkc = 0;
+        std::vector<std::uint8_t> payload;
+        if (!sendAndReceiveDatagram(socketFd_, ifIndex_, timeoutMs_, maxFramesPerCycle_,
+                                    expectedWorkingCounter_, destinationMac_, sourceMac_,
+                                    req, wkc, payload, outError)) {
+            return false;
+        }
+        if (payload.size() < 4U) {
+            outError = "SM payload too short for mailbox";
+            return false;
+        }
+        outStart = static_cast<std::uint16_t>(payload[0]) |
+                   (static_cast<std::uint16_t>(payload[1]) << 8U);
+        outLen = static_cast<std::uint16_t>(payload[2]) |
+                 (static_cast<std::uint16_t>(payload[3]) << 8U);
+        return true;
+    };
+
+    // Resolve mailbox windows from SM0/SM1 if available.
+    std::uint16_t sm0Start = 0U, sm0Len = 0U, sm1Start = 0U, sm1Len = 0U;
+    if (readSmWindow(0U, sm0Start, sm0Len) && readSmWindow(1U, sm1Start, sm1Len) &&
+        sm0Len > 0U && sm1Len > 0U) {
+        writeOffset = sm0Start;
+        writeSize = sm0Len;
+        readOffset = sm1Start;
+        readSize = sm1Len;
+    }
 
     auto mailboxWrite = [&](const std::vector<std::uint8_t>& coePayload) -> bool {
         EscMailboxFrame frame;
@@ -591,18 +632,18 @@ bool LinuxRawSocketTransport::sdoUpload(std::uint16_t slavePosition, const SdoAd
         frame.counter = static_cast<std::uint8_t>(mailboxCounter_++ & 0x07U);
         frame.payload = coePayload;
         auto bytes = CoeMailboxProtocol::encodeEscMailbox(frame);
-        if (bytes.size() > mailboxWriteSize_) {
+        if (bytes.size() > writeSize) {
             outError = "CoE mailbox payload too large for configured write mailbox";
             return false;
         }
-        bytes.resize(mailboxWriteSize_, 0U);
+        bytes.resize(writeSize, 0U);
 
         const auto currentIndex = datagramIndex_++;
         EthercatDatagramRequest req;
         req.command = kCommandApwr;
         req.datagramIndex = currentIndex;
         req.adp = adp;
-        req.ado = mailboxWriteOffset_;
+        req.ado = writeOffset;
         req.payload = bytes;
 
         std::uint16_t wkc = 0;
@@ -624,8 +665,8 @@ bool LinuxRawSocketTransport::sdoUpload(std::uint16_t slavePosition, const SdoAd
             req.command = kCommandAprd;
             req.datagramIndex = currentIndex;
             req.adp = adp;
-            req.ado = mailboxReadOffset_;
-            req.payload.assign(mailboxReadSize_, 0U);
+            req.ado = readOffset;
+            req.payload.assign(readSize, 0U);
 
             std::uint16_t wkc = 0;
             std::vector<std::uint8_t> payload;
@@ -707,6 +748,47 @@ bool LinuxRawSocketTransport::sdoDownload(std::uint16_t slavePosition, const Sdo
         return false;
     }
     const auto adp = toAutoIncrementAddress(slavePosition);
+    std::uint16_t writeOffset = mailboxWriteOffset_;
+    std::uint16_t writeSize = mailboxWriteSize_;
+    std::uint16_t readOffset = mailboxReadOffset_;
+    std::uint16_t readSize = mailboxReadSize_;
+
+    auto readSmWindow = [&](std::uint8_t smIndex, std::uint16_t& outStart, std::uint16_t& outLen) -> bool {
+        const auto currentIndex = datagramIndex_++;
+        EthercatDatagramRequest req;
+        req.command = kCommandAprd;
+        req.datagramIndex = currentIndex;
+        req.adp = adp;
+        req.ado = static_cast<std::uint16_t>(kRegisterSmBase + (smIndex * 8U));
+        req.payload.assign(8U, 0U);
+
+        std::uint16_t wkc = 0;
+        std::vector<std::uint8_t> payload;
+        if (!sendAndReceiveDatagram(socketFd_, ifIndex_, timeoutMs_, maxFramesPerCycle_,
+                                    expectedWorkingCounter_, destinationMac_, sourceMac_,
+                                    req, wkc, payload, outError)) {
+            return false;
+        }
+        if (payload.size() < 4U) {
+            outError = "SM payload too short for mailbox";
+            return false;
+        }
+        outStart = static_cast<std::uint16_t>(payload[0]) |
+                   (static_cast<std::uint16_t>(payload[1]) << 8U);
+        outLen = static_cast<std::uint16_t>(payload[2]) |
+                 (static_cast<std::uint16_t>(payload[3]) << 8U);
+        return true;
+    };
+
+    // Resolve mailbox windows from SM0/SM1 if available.
+    std::uint16_t sm0Start = 0U, sm0Len = 0U, sm1Start = 0U, sm1Len = 0U;
+    if (readSmWindow(0U, sm0Start, sm0Len) && readSmWindow(1U, sm1Start, sm1Len) &&
+        sm0Len > 0U && sm1Len > 0U) {
+        writeOffset = sm0Start;
+        writeSize = sm0Len;
+        readOffset = sm1Start;
+        readSize = sm1Len;
+    }
 
     auto mailboxWrite = [&](const std::vector<std::uint8_t>& coePayload) -> bool {
         EscMailboxFrame frame;
@@ -716,18 +798,18 @@ bool LinuxRawSocketTransport::sdoDownload(std::uint16_t slavePosition, const Sdo
         frame.counter = static_cast<std::uint8_t>(mailboxCounter_++ & 0x07U);
         frame.payload = coePayload;
         auto bytes = CoeMailboxProtocol::encodeEscMailbox(frame);
-        if (bytes.size() > mailboxWriteSize_) {
+        if (bytes.size() > writeSize) {
             outError = "CoE mailbox payload too large for configured write mailbox";
             return false;
         }
-        bytes.resize(mailboxWriteSize_, 0U);
+        bytes.resize(writeSize, 0U);
 
         const auto currentIndex = datagramIndex_++;
         EthercatDatagramRequest req;
         req.command = kCommandApwr;
         req.datagramIndex = currentIndex;
         req.adp = adp;
-        req.ado = mailboxWriteOffset_;
+        req.ado = writeOffset;
         req.payload = bytes;
 
         std::uint16_t wkc = 0;
@@ -749,8 +831,8 @@ bool LinuxRawSocketTransport::sdoDownload(std::uint16_t slavePosition, const Sdo
             req.command = kCommandAprd;
             req.datagramIndex = currentIndex;
             req.adp = adp;
-            req.ado = mailboxReadOffset_;
-            req.payload.assign(mailboxReadSize_, 0U);
+            req.ado = readOffset;
+            req.payload.assign(readSize, 0U);
 
             std::uint16_t wkc = 0;
             std::vector<std::uint8_t> payload;
