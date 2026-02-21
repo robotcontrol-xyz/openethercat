@@ -21,6 +21,9 @@ struct TopologySlaveInfo {
     std::uint16_t position = 0;
     std::uint32_t vendorId = 0;
     std::uint32_t productCode = 0;
+    std::uint16_t escType = 0;
+    std::uint16_t escRevision = 0;
+    bool identityFromCoe = false;
     bool online = false;
 };
 

@@ -39,8 +39,8 @@ constexpr std::uint8_t kCommandApwr = 0x02;
 constexpr std::uint16_t kRegisterAlControl = 0x0120;
 constexpr std::uint16_t kRegisterAlStatus = 0x0130;
 constexpr std::uint16_t kRegisterAlStatusCode = 0x0134;
-constexpr std::uint16_t kRegisterVendorId = 0x0008;
-constexpr std::uint16_t kRegisterProductCode = 0x000A;
+constexpr std::uint16_t kRegisterEscType = 0x0008;
+constexpr std::uint16_t kRegisterEscRevision = 0x000A;
 constexpr std::uint16_t kAlStateMask = 0x000F;
 
 bool openEthercatInterfaceSocket(const std::string& ifname,
@@ -840,23 +840,25 @@ bool LinuxRawSocketTransport::discoverTopology(TopologySnapshot& outSnapshot, st
         return false;
     }
 
+    auto autoIncAddress = [](std::uint16_t position) -> std::uint16_t {
+        // APRD/APWR use signed auto-increment addressing: 0, -1, -2, ...
+        return static_cast<std::uint16_t>(0U - position);
+    };
+
     for (std::uint16_t position = 0; position < 256; ++position) {
-        SlaveState state = SlaveState::Init;
-        if (!readSlaveState(position, state)) {
-            continue;
-        }
+        const std::uint16_t adp = autoIncAddress(position);
         TopologySlaveInfo info;
         info.position = position;
-        info.online = true;
+        info.online = false;
 
-        const auto readU32At = [&](std::uint16_t ado, std::uint32_t& out) -> bool {
+        const auto readAt = [&](std::uint16_t ado, std::size_t size, std::vector<std::uint8_t>& out) -> bool {
             const auto currentIndex = datagramIndex_++;
             EthercatDatagramRequest request;
             request.command = kCommandAprd;
             request.datagramIndex = currentIndex;
-            request.adp = position;
+            request.adp = adp;
             request.ado = ado;
-            request.payload = {0, 0, 0, 0};
+            request.payload.assign(size, 0U);
 
             std::uint16_t wkc = 0;
             std::vector<std::uint8_t> payload;
@@ -865,22 +867,63 @@ bool LinuxRawSocketTransport::discoverTopology(TopologySnapshot& outSnapshot, st
                                         request, wkc, payload, error_)) {
                 return false;
             }
-            if (payload.size() < 4) {
+            if (payload.size() < size) {
                 return false;
             }
-            out = static_cast<std::uint32_t>(payload[0]) |
-                  (static_cast<std::uint32_t>(payload[1]) << 8U) |
-                  (static_cast<std::uint32_t>(payload[2]) << 16U) |
-                  (static_cast<std::uint32_t>(payload[3]) << 24U);
+            out = std::move(payload);
             return true;
         };
 
-        std::uint32_t vendor = 0;
-        std::uint32_t product = 0;
-        (void)readU32At(kRegisterVendorId, vendor);
-        (void)readU32At(kRegisterProductCode, product);
-        info.vendorId = vendor;
-        info.productCode = product;
+        std::vector<std::uint8_t> alPayload;
+        if (!readAt(kRegisterAlStatus, 2, alPayload)) {
+            if (position == 0) {
+                continue;
+            }
+            // EtherCAT chains are contiguous in auto-increment addressing.
+            break;
+        }
+        info.online = true;
+
+        std::vector<std::uint8_t> escTypePayload;
+        if (readAt(kRegisterEscType, 2, escTypePayload) && escTypePayload.size() >= 2) {
+            info.escType = static_cast<std::uint16_t>(escTypePayload[0]) |
+                           (static_cast<std::uint16_t>(escTypePayload[1]) << 8U);
+        }
+        std::vector<std::uint8_t> escRevisionPayload;
+        if (readAt(kRegisterEscRevision, 2, escRevisionPayload) && escRevisionPayload.size() >= 2) {
+            info.escRevision = static_cast<std::uint16_t>(escRevisionPayload[0]) |
+                               (static_cast<std::uint16_t>(escRevisionPayload[1]) << 8U);
+        }
+
+        // Prefer standardized CoE identity object (0x1018) for real vendor/product identity.
+        std::uint32_t abort = 0U;
+        std::string sdoError;
+        std::vector<std::uint8_t> objectData;
+        SdoAddress vendorAddr;
+        vendorAddr.index = 0x1018U;
+        vendorAddr.subIndex = 0x01U;
+        SdoAddress productAddr;
+        productAddr.index = 0x1018U;
+        productAddr.subIndex = 0x02U;
+        const bool hasVendor = sdoUpload(adp, vendorAddr, objectData, abort, sdoError) && objectData.size() >= 4;
+        if (hasVendor) {
+            info.vendorId = static_cast<std::uint32_t>(objectData[0]) |
+                            (static_cast<std::uint32_t>(objectData[1]) << 8U) |
+                            (static_cast<std::uint32_t>(objectData[2]) << 16U) |
+                            (static_cast<std::uint32_t>(objectData[3]) << 24U);
+        }
+        objectData.clear();
+        abort = 0U;
+        sdoError.clear();
+        const bool hasProduct = sdoUpload(adp, productAddr, objectData, abort, sdoError) && objectData.size() >= 4;
+        if (hasProduct) {
+            info.productCode = static_cast<std::uint32_t>(objectData[0]) |
+                               (static_cast<std::uint32_t>(objectData[1]) << 8U) |
+                               (static_cast<std::uint32_t>(objectData[2]) << 16U) |
+                               (static_cast<std::uint32_t>(objectData[3]) << 24U);
+        }
+        info.identityFromCoe = hasVendor && hasProduct;
+
         outSnapshot.slaves.push_back(info);
     }
     outSnapshot.redundancyHealthy = (secondarySocketFd_ >= 0) || !redundancyEnabled_;
