@@ -1257,6 +1257,31 @@ bool LinuxRawSocketTransport::configureProcessImage(const NetworkConfiguration& 
                                       expectedWorkingCounter_, destinationMac_, sourceMac_,
                                       req, wkc, ack, outError);
     };
+    const auto writeSm = [&](std::uint16_t position, std::uint8_t smIndex,
+                             std::uint16_t start, std::uint16_t len,
+                             std::uint8_t control, std::uint8_t activate) -> bool {
+        std::vector<std::uint8_t> payload(8U, 0U);
+        payload[0] = static_cast<std::uint8_t>(start & 0xFFU);
+        payload[1] = static_cast<std::uint8_t>((start >> 8U) & 0xFFU);
+        payload[2] = static_cast<std::uint8_t>(len & 0xFFU);
+        payload[3] = static_cast<std::uint8_t>((len >> 8U) & 0xFFU);
+        payload[4] = control;
+        payload[6] = activate;
+
+        const auto currentIndex = datagramIndex_++;
+        EthercatDatagramRequest req;
+        req.command = kCommandApwr;
+        req.datagramIndex = currentIndex;
+        req.adp = toAutoIncrementAddress(position);
+        req.ado = static_cast<std::uint16_t>(kRegisterSmBase + (smIndex * 8U));
+        req.payload = std::move(payload);
+
+        std::uint16_t wkc = 0;
+        std::vector<std::uint8_t> ack;
+        return sendAndReceiveDatagram(socketFd_, ifIndex_, timeoutMs_, maxFramesPerCycle_,
+                                      expectedWorkingCounter_, destinationMac_, sourceMac_,
+                                      req, wkc, ack, outError);
+    };
 
     std::unordered_map<std::string, std::uint16_t> slaveByName;
     slaveByName.reserve(config.slaves.size());
@@ -1301,6 +1326,15 @@ bool LinuxRawSocketTransport::configureProcessImage(const NetworkConfiguration& 
         }
         return out;
     };
+    auto estimatedByteLength = [](const std::vector<SignalBinding>& signals) -> std::uint16_t {
+        std::size_t maxByte = 0U;
+        bool any = false;
+        for (const auto& sig : signals) {
+            any = true;
+            maxByte = std::max(maxByte, sig.byteOffset);
+        }
+        return static_cast<std::uint16_t>(any ? (maxByte + 1U) : 0U);
+    };
 
     std::uint32_t outputLogical = logicalAddress_;
     std::uint32_t inputLogical = logicalAddress_ + static_cast<std::uint32_t>(config.processImageOutputBytes);
@@ -1336,6 +1370,23 @@ bool LinuxRawSocketTransport::configureProcessImage(const NetworkConfiguration& 
                 } else if (traceMap) {
                     std::cerr << "[oec-map] slave=" << position
                               << " default RxPDO config failed: " << pdoError << '\n';
+                }
+                if (smLen == 0U) {
+                    // Mailbox-less fallback (SOEM-style simple IO): write minimal SM2 defaults.
+                    const auto estLen = std::max<std::uint16_t>(1U, estimatedByteLength(sigIt->second));
+                    if (writeSm(position, 2U, 0x1100U, estLen, 0x24U, 0x01U)) {
+                        if (!readSm(position, 2U, smStart, smLen)) {
+                            return false;
+                        }
+                        if (traceMap) {
+                            std::cerr << "[oec-map] slave=" << position
+                                      << " SM2 re-read after direct SM fallback (start=0x" << std::hex << smStart
+                                      << ", len=" << std::dec << smLen << ")\n";
+                        }
+                    } else if (traceMap) {
+                        std::cerr << "[oec-map] slave=" << position
+                                  << " direct SM2 fallback failed: " << outError << '\n';
+                    }
                 }
             }
         }
@@ -1383,6 +1434,23 @@ bool LinuxRawSocketTransport::configureProcessImage(const NetworkConfiguration& 
                 } else if (traceMap) {
                     std::cerr << "[oec-map] slave=" << position
                               << " default TxPDO config failed: " << pdoError << '\n';
+                }
+                if (smLen == 0U) {
+                    // Mailbox-less fallback (SOEM-style simple IO): write minimal SM3 defaults.
+                    const auto estLen = std::max<std::uint16_t>(1U, estimatedByteLength(sigIt->second));
+                    if (writeSm(position, 3U, 0x1100U, estLen, 0x20U, 0x01U)) {
+                        if (!readSm(position, 3U, smStart, smLen)) {
+                            return false;
+                        }
+                        if (traceMap) {
+                            std::cerr << "[oec-map] slave=" << position
+                                      << " SM3 re-read after direct SM fallback (start=0x" << std::hex << smStart
+                                      << ", len=" << std::dec << smLen << ")\n";
+                        }
+                    } else if (traceMap) {
+                        std::cerr << "[oec-map] slave=" << position
+                                  << " direct SM3 fallback failed: " << outError << '\n';
+                    }
                 }
             }
         }
