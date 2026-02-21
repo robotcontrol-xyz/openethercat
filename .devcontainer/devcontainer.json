@@ -1,0 +1,26 @@
+{
+  "name": "openEtherCAT C++ Dev",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": ".."
+  },
+  "workspaceFolder": "/workspaces/openEtherCAT",
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspaces/openEtherCAT,type=bind",
+  "remoteUser": "vscode",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-vscode.cpptools",
+        "ms-vscode.cmake-tools",
+        "twxs.cmake",
+        "ms-azuretools.vscode-docker"
+      ],
+      "settings": {
+        "cmake.configureOnOpen": true,
+        "cmake.buildDirectory": "${workspaceFolder}/build"
+      }
+    }
+  },
+  "postCreateCommand": "cmake -S . -B build && cmake --build build",
+  "features": {}
+}

@@ -1,0 +1,935 @@
+#include "openethercat/transport/linux_raw_socket_transport.hpp"
+
+#include <algorithm>
+#include <cerrno>
+#include <cstring>
+#include <string>
+#include <vector>
+#include <chrono>
+#include <thread>
+
+#include <linux/if_packet.h>
+#include <net/if.h>
+#include <netinet/in.h>
+#include <sys/ioctl.h>
+#include <sys/select.h>
+#include <sys/socket.h>
+#include <unistd.h>
+
+#include "openethercat/transport/ethercat_frame.hpp"
+#include "openethercat/master/coe_mailbox.hpp"
+#include "openethercat/master/foe_eoe.hpp"
+#include "openethercat/master/topology_manager.hpp"
+#include "openethercat/transport/coe_mailbox_protocol.hpp"
+
+namespace oec {
+namespace {
+
+constexpr std::uint16_t kEtherTypeEthercat = 0x88A4;
+constexpr std::uint8_t kCommandLrw = 0x0C;
+constexpr std::uint8_t kCommandBrd = 0x07;
+constexpr std::uint8_t kCommandBwr = 0x08;
+constexpr std::uint8_t kCommandAprd = 0x01;
+constexpr std::uint8_t kCommandApwr = 0x02;
+constexpr std::uint16_t kRegisterAlControl = 0x0120;
+constexpr std::uint16_t kRegisterAlStatus = 0x0130;
+constexpr std::uint16_t kRegisterAlStatusCode = 0x0134;
+constexpr std::uint16_t kRegisterVendorId = 0x0008;
+constexpr std::uint16_t kRegisterProductCode = 0x000A;
+constexpr std::uint16_t kAlStateMask = 0x000F;
+
+bool openEthercatInterfaceSocket(const std::string& ifname,
+                                 int& outSocketFd,
+                                 int& outIfIndex,
+                                 std::array<std::uint8_t, 6>& outSourceMac,
+                                 std::string& outError) {
+    outSocketFd = ::socket(AF_PACKET, SOCK_RAW, htons(kEtherTypeEthercat));
+    if (outSocketFd < 0) {
+        outError = "socket() failed: " + std::string(std::strerror(errno));
+        return false;
+    }
+
+    ifreq ifr {};
+    std::strncpy(ifr.ifr_name, ifname.c_str(), IFNAMSIZ - 1);
+    if (::ioctl(outSocketFd, SIOCGIFINDEX, &ifr) < 0) {
+        outError = "ioctl(SIOCGIFINDEX) failed: " + std::string(std::strerror(errno));
+        ::close(outSocketFd);
+        outSocketFd = -1;
+        return false;
+    }
+    outIfIndex = ifr.ifr_ifindex;
+
+    if (::ioctl(outSocketFd, SIOCGIFHWADDR, &ifr) < 0) {
+        outError = "ioctl(SIOCGIFHWADDR) failed: " + std::string(std::strerror(errno));
+        ::close(outSocketFd);
+        outSocketFd = -1;
+        return false;
+    }
+    for (std::size_t i = 0; i < outSourceMac.size(); ++i) {
+        outSourceMac[i] = static_cast<std::uint8_t>(ifr.ifr_hwaddr.sa_data[i]);
+    }
+
+    sockaddr_ll sll {};
+    sll.sll_family = AF_PACKET;
+    sll.sll_protocol = htons(kEtherTypeEthercat);
+    sll.sll_ifindex = outIfIndex;
+    if (::bind(outSocketFd, reinterpret_cast<sockaddr*>(&sll), sizeof(sll)) < 0) {
+        outError = "bind() failed: " + std::string(std::strerror(errno));
+        ::close(outSocketFd);
+        outSocketFd = -1;
+        return false;
+    }
+
+    return true;
+}
+
+bool decodeAlState(std::uint16_t rawState, SlaveState& out) {
+    switch (rawState & kAlStateMask) {
+    case 0x01:
+        out = SlaveState::Init;
+        return true;
+    case 0x02:
+        out = SlaveState::PreOp;
+        return true;
+    case 0x04:
+        out = SlaveState::SafeOp;
+        return true;
+    case 0x08:
+        out = SlaveState::Op;
+        return true;
+    default:
+        return false;
+    }
+}
+
+bool sendAndReceiveDatagram(
+    int socketFd,
+    int ifIndex,
+    int timeoutMs,
+    std::size_t maxFramesPerCycle,
+    std::uint16_t expectedWorkingCounter,
+    std::array<std::uint8_t, 6>& destinationMac,
+    std::array<std::uint8_t, 6>& sourceMac,
+    const EthercatDatagramRequest& request,
+    std::uint16_t& outWkc,
+    std::vector<std::uint8_t>& outPayload,
+    std::string& outError) {
+    const auto frame = EthercatFrameCodec::buildDatagramFrame(
+        destinationMac.data(), sourceMac.data(), request);
+
+    sockaddr_ll target {};
+    target.sll_family = AF_PACKET;
+    target.sll_protocol = htons(kEtherTypeEthercat);
+    target.sll_ifindex = ifIndex;
+    target.sll_halen = 6;
+    std::copy(destinationMac.begin(), destinationMac.end(), target.sll_addr);
+
+    const auto sent = ::sendto(socketFd, frame.data(), frame.size(), 0,
+                               reinterpret_cast<const sockaddr*>(&target), sizeof(target));
+    if (sent < 0 || static_cast<std::size_t>(sent) != frame.size()) {
+        outError = "sendto() failed: " + std::string(std::strerror(errno));
+        return false;
+    }
+
+    const auto start = std::chrono::steady_clock::now();
+    std::size_t scannedFrames = 0U;
+    std::vector<std::uint8_t> rxFrame(1518U, 0U);
+    while (scannedFrames < maxFramesPerCycle) {
+        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - start);
+        const auto remainingMs = timeoutMs - static_cast<int>(elapsed.count());
+        if (remainingMs <= 0) {
+            outError = "receive timeout";
+            return false;
+        }
+
+        fd_set readSet;
+        FD_ZERO(&readSet);
+        FD_SET(socketFd, &readSet);
+
+        timeval timeout {};
+        timeout.tv_sec = remainingMs / 1000;
+        timeout.tv_usec = (remainingMs % 1000) * 1000;
+
+        const int selectResult = ::select(socketFd + 1, &readSet, nullptr, nullptr, &timeout);
+        if (selectResult == 0) {
+            outError = "receive timeout";
+            return false;
+        }
+        if (selectResult < 0) {
+            outError = "select() failed: " + std::string(std::strerror(errno));
+            return false;
+        }
+
+        const auto received = ::recv(socketFd, rxFrame.data(), rxFrame.size(), 0);
+        if (received < 0) {
+            outError = "recv() failed: " + std::string(std::strerror(errno));
+            return false;
+        }
+        rxFrame.resize(static_cast<std::size_t>(received));
+        ++scannedFrames;
+
+        const auto parsed = EthercatFrameCodec::parseDatagramFrame(
+            rxFrame, request.command, request.datagramIndex, request.payload.size());
+        if (!parsed) {
+            continue;
+        }
+        if (parsed->workingCounter < expectedWorkingCounter) {
+            outError = "working counter too low";
+            return false;
+        }
+
+        outWkc = parsed->workingCounter;
+        outPayload = parsed->payload;
+        return true;
+    }
+
+    outError = "response frame not found in cycle window";
+    return false;
+}
+
+} // namespace
+
+LinuxRawSocketTransport::LinuxRawSocketTransport(std::string ifname) : ifname_(std::move(ifname)) {}
+LinuxRawSocketTransport::LinuxRawSocketTransport(std::string primaryIfname, std::string secondaryIfname)
+    : ifname_(std::move(primaryIfname)), secondaryIfname_(std::move(secondaryIfname)),
+      redundancyEnabled_(true) {}
+
+LinuxRawSocketTransport::~LinuxRawSocketTransport() { close(); }
+
+void LinuxRawSocketTransport::setCycleTimeoutMs(int timeoutMs) {
+    timeoutMs_ = (timeoutMs <= 0) ? 1 : timeoutMs;
+}
+
+void LinuxRawSocketTransport::setLogicalAddress(std::uint32_t logicalAddress) {
+    logicalAddress_ = logicalAddress;
+}
+
+void LinuxRawSocketTransport::setExpectedWorkingCounter(std::uint16_t expectedWorkingCounter) {
+    expectedWorkingCounter_ = expectedWorkingCounter;
+}
+
+void LinuxRawSocketTransport::setMaxFramesPerCycle(std::size_t maxFramesPerCycle) {
+    maxFramesPerCycle_ = (maxFramesPerCycle == 0U) ? 1U : maxFramesPerCycle;
+}
+
+void LinuxRawSocketTransport::enableRedundancy(bool enabled) { redundancyEnabled_ = enabled; }
+
+void LinuxRawSocketTransport::setMailboxConfiguration(std::uint16_t writeOffset, std::uint16_t writeSize,
+                                                      std::uint16_t readOffset, std::uint16_t readSize) {
+    mailboxWriteOffset_ = writeOffset;
+    mailboxWriteSize_ = writeSize;
+    mailboxReadOffset_ = readOffset;
+    mailboxReadSize_ = readSize;
+}
+
+bool LinuxRawSocketTransport::open() {
+    close();
+    lastWorkingCounter_ = 0;
+    if (!openEthercatInterfaceSocket(ifname_, socketFd_, ifIndex_, sourceMac_, error_)) {
+        close();
+        return false;
+    }
+
+    if (redundancyEnabled_ && !secondaryIfname_.empty()) {
+        std::array<std::uint8_t, 6> secondaryMac {};
+        if (!openEthercatInterfaceSocket(secondaryIfname_, secondarySocketFd_, secondaryIfIndex_,
+                                         secondaryMac, error_)) {
+            close();
+            return false;
+        }
+    }
+
+    error_.clear();
+    return true;
+}
+
+void LinuxRawSocketTransport::close() {
+    if (socketFd_ >= 0) {
+        ::close(socketFd_);
+        socketFd_ = -1;
+    }
+    ifIndex_ = 0;
+    if (secondarySocketFd_ >= 0) {
+        ::close(secondarySocketFd_);
+        secondarySocketFd_ = -1;
+    }
+    secondaryIfIndex_ = 0;
+    lastWorkingCounter_ = 0;
+    lastFrameUsedSecondary_ = false;
+}
+
+bool LinuxRawSocketTransport::exchange(const std::vector<std::uint8_t>& txProcessData,
+                                       std::vector<std::uint8_t>& rxProcessData) {
+    if (socketFd_ < 0) {
+        error_ = "transport not open";
+        return false;
+    }
+    if (rxProcessData.size() != txProcessData.size()) {
+        error_ = "TX/RX process image size mismatch";
+        return false;
+    }
+
+    const auto currentIndex = datagramIndex_++;
+    EthercatLrwRequest request;
+    request.datagramIndex = currentIndex;
+    request.logicalAddress = logicalAddress_;
+    request.payload = txProcessData;
+
+    EthercatDatagramRequest datagram;
+    datagram.command = kCommandLrw;
+    datagram.datagramIndex = currentIndex;
+    datagram.adp = static_cast<std::uint16_t>(request.logicalAddress & 0xFFFFU);
+    datagram.ado = static_cast<std::uint16_t>((request.logicalAddress >> 16U) & 0xFFFFU);
+    datagram.payload = request.payload;
+
+    std::uint16_t wkc = 0;
+    std::vector<std::uint8_t> payload;
+    if (!sendAndReceiveDatagram(socketFd_, ifIndex_, timeoutMs_, maxFramesPerCycle_,
+                                expectedWorkingCounter_, destinationMac_, sourceMac_,
+                                datagram, wkc, payload, error_)) {
+        if (redundancyEnabled_ && secondarySocketFd_ >= 0) {
+            if (!sendAndReceiveDatagram(secondarySocketFd_, secondaryIfIndex_, timeoutMs_, maxFramesPerCycle_,
+                                        expectedWorkingCounter_, destinationMac_, sourceMac_,
+                                        datagram, wkc, payload, error_)) {
+                return false;
+            }
+            lastFrameUsedSecondary_ = true;
+        } else {
+            return false;
+        }
+    } else {
+        lastFrameUsedSecondary_ = false;
+    }
+
+    lastWorkingCounter_ = wkc;
+    rxProcessData = payload;
+    return true;
+}
+
+bool LinuxRawSocketTransport::requestNetworkState(SlaveState state) {
+    if (socketFd_ < 0) {
+        error_ = "transport not open";
+        return false;
+    }
+
+    const auto currentIndex = datagramIndex_++;
+    EthercatDatagramRequest request;
+    request.command = kCommandBwr;
+    request.datagramIndex = currentIndex;
+    request.adp = 0x0000;
+    request.ado = kRegisterAlControl;
+    request.payload = {static_cast<std::uint8_t>(state), 0x00U};
+
+    std::uint16_t wkc = 0;
+    std::vector<std::uint8_t> payload;
+    if (!sendAndReceiveDatagram(socketFd_, ifIndex_, timeoutMs_, maxFramesPerCycle_,
+                                expectedWorkingCounter_, destinationMac_, sourceMac_,
+                                request, wkc, payload, error_)) {
+        return false;
+    }
+
+    lastWorkingCounter_ = wkc;
+    return true;
+}
+
+bool LinuxRawSocketTransport::readNetworkState(SlaveState& outState) {
+    if (socketFd_ < 0) {
+        error_ = "transport not open";
+        return false;
+    }
+
+    const auto currentIndex = datagramIndex_++;
+    EthercatDatagramRequest request;
+    request.command = kCommandBrd;
+    request.datagramIndex = currentIndex;
+    request.adp = 0x0000;
+    request.ado = kRegisterAlStatus;
+    request.payload = {0x00U, 0x00U};
+
+    std::uint16_t wkc = 0;
+    std::vector<std::uint8_t> payload;
+    if (!sendAndReceiveDatagram(socketFd_, ifIndex_, timeoutMs_, maxFramesPerCycle_,
+                                expectedWorkingCounter_, destinationMac_, sourceMac_,
+                                request, wkc, payload, error_)) {
+        return false;
+    }
+    if (payload.size() < 2) {
+        error_ = "state read payload too short";
+        return false;
+    }
+
+    const auto raw = static_cast<std::uint16_t>(
+        static_cast<std::uint16_t>(payload[0]) |
+        (static_cast<std::uint16_t>(payload[1]) << 8U));
+    SlaveState decoded = SlaveState::Init;
+    if (!decodeAlState(raw, decoded)) {
+        error_ = "unknown AL state value";
+        return false;
+    }
+
+    lastWorkingCounter_ = wkc;
+    outState = decoded;
+    return true;
+}
+
+bool LinuxRawSocketTransport::requestSlaveState(std::uint16_t position, SlaveState state) {
+    if (socketFd_ < 0) {
+        error_ = "transport not open";
+        return false;
+    }
+
+    const auto currentIndex = datagramIndex_++;
+    EthercatDatagramRequest request;
+    request.command = kCommandApwr;
+    request.datagramIndex = currentIndex;
+    request.adp = position;
+    request.ado = kRegisterAlControl;
+    request.payload = {static_cast<std::uint8_t>(state), 0x00U};
+
+    std::uint16_t wkc = 0;
+    std::vector<std::uint8_t> payload;
+    if (!sendAndReceiveDatagram(socketFd_, ifIndex_, timeoutMs_, maxFramesPerCycle_,
+                                expectedWorkingCounter_, destinationMac_, sourceMac_,
+                                request, wkc, payload, error_)) {
+        return false;
+    }
+    lastWorkingCounter_ = wkc;
+    return true;
+}
+
+bool LinuxRawSocketTransport::readSlaveState(std::uint16_t position, SlaveState& outState) {
+    if (socketFd_ < 0) {
+        error_ = "transport not open";
+        return false;
+    }
+
+    const auto currentIndex = datagramIndex_++;
+    EthercatDatagramRequest request;
+    request.command = kCommandAprd;
+    request.datagramIndex = currentIndex;
+    request.adp = position;
+    request.ado = kRegisterAlStatus;
+    request.payload = {0x00U, 0x00U};
+
+    std::uint16_t wkc = 0;
+    std::vector<std::uint8_t> payload;
+    if (!sendAndReceiveDatagram(socketFd_, ifIndex_, timeoutMs_, maxFramesPerCycle_,
+                                expectedWorkingCounter_, destinationMac_, sourceMac_,
+                                request, wkc, payload, error_)) {
+        return false;
+    }
+    if (payload.size() < 2) {
+        error_ = "state read payload too short";
+        return false;
+    }
+
+    const auto raw = static_cast<std::uint16_t>(
+        static_cast<std::uint16_t>(payload[0]) |
+        (static_cast<std::uint16_t>(payload[1]) << 8U));
+    SlaveState decoded = SlaveState::Init;
+    if (!decodeAlState(raw, decoded)) {
+        error_ = "unknown AL state value";
+        return false;
+    }
+
+    lastWorkingCounter_ = wkc;
+    outState = decoded;
+    return true;
+}
+
+bool LinuxRawSocketTransport::readSlaveAlStatusCode(std::uint16_t position, std::uint16_t& outCode) {
+    if (socketFd_ < 0) {
+        error_ = "transport not open";
+        return false;
+    }
+
+    const auto currentIndex = datagramIndex_++;
+    EthercatDatagramRequest request;
+    request.command = kCommandAprd;
+    request.datagramIndex = currentIndex;
+    request.adp = position;
+    request.ado = kRegisterAlStatusCode;
+    request.payload = {0x00U, 0x00U};
+
+    std::uint16_t wkc = 0;
+    std::vector<std::uint8_t> payload;
+    if (!sendAndReceiveDatagram(socketFd_, ifIndex_, timeoutMs_, maxFramesPerCycle_,
+                                expectedWorkingCounter_, destinationMac_, sourceMac_,
+                                request, wkc, payload, error_)) {
+        return false;
+    }
+    if (payload.size() < 2) {
+        error_ = "AL status code payload too short";
+        return false;
+    }
+
+    outCode = static_cast<std::uint16_t>(
+        static_cast<std::uint16_t>(payload[0]) |
+        (static_cast<std::uint16_t>(payload[1]) << 8U));
+    lastWorkingCounter_ = wkc;
+    return true;
+}
+
+bool LinuxRawSocketTransport::reconfigureSlave(std::uint16_t position) {
+    return requestSlaveState(position, SlaveState::Init) &&
+           requestSlaveState(position, SlaveState::PreOp) &&
+           requestSlaveState(position, SlaveState::SafeOp);
+}
+
+bool LinuxRawSocketTransport::failoverSlave(std::uint16_t position) {
+    return requestSlaveState(position, SlaveState::SafeOp);
+}
+
+bool LinuxRawSocketTransport::sdoUpload(std::uint16_t slavePosition, const SdoAddress& address,
+                                        std::vector<std::uint8_t>& outData, std::uint32_t& outAbortCode,
+                                        std::string& outError) {
+    outData.clear();
+    outAbortCode = 0U;
+    outError.clear();
+
+    if (socketFd_ < 0) {
+        outError = "transport not open";
+        return false;
+    }
+
+    auto mailboxWrite = [&](const std::vector<std::uint8_t>& coePayload) -> bool {
+        EscMailboxFrame frame;
+        frame.channel = 0;
+        frame.priority = 0;
+        frame.type = CoeMailboxProtocol::kMailboxTypeCoe;
+        frame.counter = static_cast<std::uint8_t>(mailboxCounter_++ & 0x07U);
+        frame.payload = coePayload;
+        auto bytes = CoeMailboxProtocol::encodeEscMailbox(frame);
+        if (bytes.size() > mailboxWriteSize_) {
+            outError = "CoE mailbox payload too large for configured write mailbox";
+            return false;
+        }
+        bytes.resize(mailboxWriteSize_, 0U);
+
+        const auto currentIndex = datagramIndex_++;
+        EthercatDatagramRequest req;
+        req.command = kCommandApwr;
+        req.datagramIndex = currentIndex;
+        req.adp = slavePosition;
+        req.ado = mailboxWriteOffset_;
+        req.payload = bytes;
+
+        std::uint16_t wkc = 0;
+        std::vector<std::uint8_t> payload;
+        if (!sendAndReceiveDatagram(socketFd_, ifIndex_, timeoutMs_, maxFramesPerCycle_,
+                                    expectedWorkingCounter_, destinationMac_, sourceMac_,
+                                    req, wkc, payload, outError)) {
+            return false;
+        }
+        lastWorkingCounter_ = wkc;
+        return true;
+    };
+
+    auto mailboxRead = [&](EscMailboxFrame& outFrame) -> bool {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs_);
+        while (std::chrono::steady_clock::now() < deadline) {
+            const auto currentIndex = datagramIndex_++;
+            EthercatDatagramRequest req;
+            req.command = kCommandAprd;
+            req.datagramIndex = currentIndex;
+            req.adp = slavePosition;
+            req.ado = mailboxReadOffset_;
+            req.payload.assign(mailboxReadSize_, 0U);
+
+            std::uint16_t wkc = 0;
+            std::vector<std::uint8_t> payload;
+            if (!sendAndReceiveDatagram(socketFd_, ifIndex_, timeoutMs_, maxFramesPerCycle_,
+                                        expectedWorkingCounter_, destinationMac_, sourceMac_,
+                                        req, wkc, payload, outError)) {
+                return false;
+            }
+            lastWorkingCounter_ = wkc;
+
+            auto decoded = CoeMailboxProtocol::decodeEscMailbox(payload);
+            if (!decoded) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                continue;
+            }
+            if (decoded->type != CoeMailboxProtocol::kMailboxTypeCoe) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                continue;
+            }
+            outFrame = *decoded;
+            return true;
+        }
+        outError = "Timed out waiting for CoE mailbox response";
+        return false;
+    };
+
+    if (!mailboxWrite(CoeMailboxProtocol::buildSdoInitiateUploadRequest(address))) {
+        return false;
+    }
+
+    EscMailboxFrame responseFrame;
+    if (!mailboxRead(responseFrame)) {
+        return false;
+    }
+    auto init = CoeMailboxProtocol::parseSdoInitiateUploadResponse(responseFrame.payload, address);
+    if (!init.success) {
+        outAbortCode = init.abortCode;
+        outError = init.error;
+        return false;
+    }
+
+    if (init.expedited) {
+        outData = init.data;
+        return true;
+    }
+
+    std::uint8_t toggle = 0;
+    while (true) {
+        if (!mailboxWrite(CoeMailboxProtocol::buildSdoUploadSegmentRequest(toggle))) {
+            return false;
+        }
+        if (!mailboxRead(responseFrame)) {
+            return false;
+        }
+        auto seg = CoeMailboxProtocol::parseSdoUploadSegmentResponse(responseFrame.payload);
+        if (!seg.success) {
+            outAbortCode = seg.abortCode;
+            outError = seg.error;
+            return false;
+        }
+        outData.insert(outData.end(), seg.data.begin(), seg.data.end());
+        toggle ^= 0x01U;
+        if (seg.lastSegment) {
+            break;
+        }
+    }
+
+    return true;
+}
+
+bool LinuxRawSocketTransport::sdoDownload(std::uint16_t slavePosition, const SdoAddress& address,
+                                          const std::vector<std::uint8_t>& data, std::uint32_t& outAbortCode,
+                                          std::string& outError) {
+    outAbortCode = 0U;
+    outError.clear();
+
+    if (socketFd_ < 0) {
+        outError = "transport not open";
+        return false;
+    }
+
+    auto mailboxWrite = [&](const std::vector<std::uint8_t>& coePayload) -> bool {
+        EscMailboxFrame frame;
+        frame.channel = 0;
+        frame.priority = 0;
+        frame.type = CoeMailboxProtocol::kMailboxTypeCoe;
+        frame.counter = static_cast<std::uint8_t>(mailboxCounter_++ & 0x07U);
+        frame.payload = coePayload;
+        auto bytes = CoeMailboxProtocol::encodeEscMailbox(frame);
+        if (bytes.size() > mailboxWriteSize_) {
+            outError = "CoE mailbox payload too large for configured write mailbox";
+            return false;
+        }
+        bytes.resize(mailboxWriteSize_, 0U);
+
+        const auto currentIndex = datagramIndex_++;
+        EthercatDatagramRequest req;
+        req.command = kCommandApwr;
+        req.datagramIndex = currentIndex;
+        req.adp = slavePosition;
+        req.ado = mailboxWriteOffset_;
+        req.payload = bytes;
+
+        std::uint16_t wkc = 0;
+        std::vector<std::uint8_t> payload;
+        if (!sendAndReceiveDatagram(socketFd_, ifIndex_, timeoutMs_, maxFramesPerCycle_,
+                                    expectedWorkingCounter_, destinationMac_, sourceMac_,
+                                    req, wkc, payload, outError)) {
+            return false;
+        }
+        lastWorkingCounter_ = wkc;
+        return true;
+    };
+
+    auto mailboxRead = [&](EscMailboxFrame& outFrame) -> bool {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs_);
+        while (std::chrono::steady_clock::now() < deadline) {
+            const auto currentIndex = datagramIndex_++;
+            EthercatDatagramRequest req;
+            req.command = kCommandAprd;
+            req.datagramIndex = currentIndex;
+            req.adp = slavePosition;
+            req.ado = mailboxReadOffset_;
+            req.payload.assign(mailboxReadSize_, 0U);
+
+            std::uint16_t wkc = 0;
+            std::vector<std::uint8_t> payload;
+            if (!sendAndReceiveDatagram(socketFd_, ifIndex_, timeoutMs_, maxFramesPerCycle_,
+                                        expectedWorkingCounter_, destinationMac_, sourceMac_,
+                                        req, wkc, payload, outError)) {
+                return false;
+            }
+            lastWorkingCounter_ = wkc;
+
+            auto decoded = CoeMailboxProtocol::decodeEscMailbox(payload);
+            if (!decoded) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                continue;
+            }
+            if (decoded->type != CoeMailboxProtocol::kMailboxTypeCoe) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                continue;
+            }
+            outFrame = *decoded;
+            return true;
+        }
+        outError = "Timed out waiting for CoE mailbox response";
+        return false;
+    };
+
+    if (!mailboxWrite(CoeMailboxProtocol::buildSdoInitiateDownloadRequest(
+            address, static_cast<std::uint32_t>(data.size())))) {
+        return false;
+    }
+
+    EscMailboxFrame responseFrame;
+    if (!mailboxRead(responseFrame)) {
+        return false;
+    }
+    auto ack = CoeMailboxProtocol::parseSdoDownloadResponse(responseFrame.payload);
+    if (!ack.success) {
+        outAbortCode = ack.abortCode;
+        outError = ack.error;
+        return false;
+    }
+
+    constexpr std::size_t kSegmentPayloadMax = 7;
+    std::size_t offset = 0;
+    std::uint8_t toggle = 0;
+    while (offset < data.size()) {
+        const auto remaining = data.size() - offset;
+        const auto chunk = std::min<std::size_t>(remaining, kSegmentPayloadMax);
+        std::vector<std::uint8_t> segment(data.begin() + static_cast<std::ptrdiff_t>(offset),
+                                          data.begin() + static_cast<std::ptrdiff_t>(offset + chunk));
+        const bool lastSegment = (offset + chunk) >= data.size();
+        if (!mailboxWrite(CoeMailboxProtocol::buildSdoDownloadSegmentRequest(
+                toggle, lastSegment, segment, kSegmentPayloadMax))) {
+            return false;
+        }
+        if (!mailboxRead(responseFrame)) {
+            return false;
+        }
+        ack = CoeMailboxProtocol::parseSdoDownloadResponse(responseFrame.payload);
+        if (!ack.success) {
+            outAbortCode = ack.abortCode;
+            outError = ack.error;
+            return false;
+        }
+        offset += chunk;
+        toggle ^= 0x01U;
+    }
+
+    return true;
+}
+
+bool LinuxRawSocketTransport::configurePdo(std::uint16_t slavePosition, std::uint16_t assignIndex,
+                                           const std::vector<PdoMappingEntry>& entries,
+                                           std::string& outError) {
+    outError.clear();
+
+    auto writeSdoU8 = [&](std::uint16_t index, std::uint8_t subIndex, std::uint8_t value) -> bool {
+        std::uint32_t abortCode = 0;
+        std::string sdoError;
+        const std::vector<std::uint8_t> data = {value};
+        SdoAddress address;
+        address.index = index;
+        address.subIndex = subIndex;
+        if (!sdoDownload(slavePosition, address, data, abortCode, sdoError)) {
+            outError = "SDO write 0x" + std::to_string(index) + ":" + std::to_string(subIndex) + " failed: " + sdoError;
+            return false;
+        }
+        return true;
+    };
+
+    auto writeSdoU16 = [&](std::uint16_t index, std::uint8_t subIndex, std::uint16_t value) -> bool {
+        std::uint32_t abortCode = 0;
+        std::string sdoError;
+        const std::vector<std::uint8_t> data = {
+            static_cast<std::uint8_t>(value & 0xFFU),
+            static_cast<std::uint8_t>((value >> 8U) & 0xFFU),
+        };
+        SdoAddress address;
+        address.index = index;
+        address.subIndex = subIndex;
+        if (!sdoDownload(slavePosition, address, data, abortCode, sdoError)) {
+            outError = "SDO write 0x" + std::to_string(index) + ":" + std::to_string(subIndex) + " failed: " + sdoError;
+            return false;
+        }
+        return true;
+    };
+
+    auto writeSdoU32 = [&](std::uint16_t index, std::uint8_t subIndex, std::uint32_t value) -> bool {
+        std::uint32_t abortCode = 0;
+        std::string sdoError;
+        const std::vector<std::uint8_t> data = {
+            static_cast<std::uint8_t>(value & 0xFFU),
+            static_cast<std::uint8_t>((value >> 8U) & 0xFFU),
+            static_cast<std::uint8_t>((value >> 16U) & 0xFFU),
+            static_cast<std::uint8_t>((value >> 24U) & 0xFFU),
+        };
+        SdoAddress address;
+        address.index = index;
+        address.subIndex = subIndex;
+        if (!sdoDownload(slavePosition, address, data, abortCode, sdoError)) {
+            outError = "SDO write 0x" + std::to_string(index) + ":" + std::to_string(subIndex) + " failed: " + sdoError;
+            return false;
+        }
+        return true;
+    };
+
+    // Disable mapping object before editing entries.
+    if (!writeSdoU8(assignIndex, 0, 0)) {
+        return false;
+    }
+
+    std::uint8_t sub = 1;
+    for (const auto& e : entries) {
+        const auto mapEntry = static_cast<std::uint32_t>(e.index) |
+                              (static_cast<std::uint32_t>(e.subIndex) << 16U) |
+                              (static_cast<std::uint32_t>(e.bitLength) << 24U);
+        if (!writeSdoU32(assignIndex, sub, mapEntry)) {
+            return false;
+        }
+        ++sub;
+    }
+
+    if (!writeSdoU8(assignIndex, 0, static_cast<std::uint8_t>(entries.size()))) {
+        return false;
+    }
+
+    // Sync manager assignment: 0x1C12 for RxPDO (0x1600..0x17FF), 0x1C13 for TxPDO (0x1A00..0x1BFF).
+    const bool isRx = (assignIndex >= 0x1600U && assignIndex < 0x1800U);
+    const std::uint16_t smAssign = isRx ? 0x1C12U : 0x1C13U;
+    if (!writeSdoU8(smAssign, 0, 0)) {
+        return false;
+    }
+    if (!writeSdoU16(smAssign, 1, assignIndex)) {
+        return false;
+    }
+    if (!writeSdoU8(smAssign, 0, 1)) {
+        return false;
+    }
+
+    return true;
+}
+
+bool LinuxRawSocketTransport::pollEmergency(EmergencyMessage& outEmergency) {
+    (void)outEmergency;
+    return false;
+}
+
+bool LinuxRawSocketTransport::discoverTopology(TopologySnapshot& outSnapshot, std::string& outError) {
+    outSnapshot = TopologySnapshot{};
+    outError.clear();
+    if (socketFd_ < 0) {
+        outError = "transport not open";
+        return false;
+    }
+
+    for (std::uint16_t position = 0; position < 256; ++position) {
+        SlaveState state = SlaveState::Init;
+        if (!readSlaveState(position, state)) {
+            continue;
+        }
+        TopologySlaveInfo info;
+        info.position = position;
+        info.online = true;
+
+        const auto readU32At = [&](std::uint16_t ado, std::uint32_t& out) -> bool {
+            const auto currentIndex = datagramIndex_++;
+            EthercatDatagramRequest request;
+            request.command = kCommandAprd;
+            request.datagramIndex = currentIndex;
+            request.adp = position;
+            request.ado = ado;
+            request.payload = {0, 0, 0, 0};
+
+            std::uint16_t wkc = 0;
+            std::vector<std::uint8_t> payload;
+            if (!sendAndReceiveDatagram(socketFd_, ifIndex_, timeoutMs_, maxFramesPerCycle_,
+                                        expectedWorkingCounter_, destinationMac_, sourceMac_,
+                                        request, wkc, payload, error_)) {
+                return false;
+            }
+            if (payload.size() < 4) {
+                return false;
+            }
+            out = static_cast<std::uint32_t>(payload[0]) |
+                  (static_cast<std::uint32_t>(payload[1]) << 8U) |
+                  (static_cast<std::uint32_t>(payload[2]) << 16U) |
+                  (static_cast<std::uint32_t>(payload[3]) << 24U);
+            return true;
+        };
+
+        std::uint32_t vendor = 0;
+        std::uint32_t product = 0;
+        (void)readU32At(kRegisterVendorId, vendor);
+        (void)readU32At(kRegisterProductCode, product);
+        info.vendorId = vendor;
+        info.productCode = product;
+        outSnapshot.slaves.push_back(info);
+    }
+    outSnapshot.redundancyHealthy = (secondarySocketFd_ >= 0) || !redundancyEnabled_;
+    return true;
+}
+
+bool LinuxRawSocketTransport::isRedundancyLinkHealthy(std::string& outError) {
+    outError.clear();
+    if (!redundancyEnabled_) {
+        return true;
+    }
+    if (secondaryIfname_.empty()) {
+        outError = "redundancy enabled but secondary interface not configured";
+        return false;
+    }
+    return secondarySocketFd_ >= 0;
+}
+
+bool LinuxRawSocketTransport::foeRead(std::uint16_t slavePosition, const FoERequest& request,
+                                      FoEResponse& outResponse, std::string& outError) {
+    (void)slavePosition;
+    (void)request;
+    outResponse.success = false;
+    outResponse.error = "FoE over mailbox for LinuxRawSocketTransport is pending full ESC mailbox integration";
+    outError = outResponse.error;
+    return false;
+}
+
+bool LinuxRawSocketTransport::foeWrite(std::uint16_t slavePosition, const FoERequest& request,
+                                       const std::vector<std::uint8_t>& data, std::string& outError) {
+    (void)slavePosition;
+    (void)request;
+    (void)data;
+    outError = "FoE over mailbox for LinuxRawSocketTransport is pending full ESC mailbox integration";
+    return false;
+}
+
+bool LinuxRawSocketTransport::eoeSend(std::uint16_t slavePosition, const std::vector<std::uint8_t>& frame,
+                                      std::string& outError) {
+    (void)slavePosition;
+    (void)frame;
+    outError = "EoE over mailbox for LinuxRawSocketTransport is pending full ESC mailbox integration";
+    return false;
+}
+
+bool LinuxRawSocketTransport::eoeReceive(std::uint16_t slavePosition, std::vector<std::uint8_t>& frame,
+                                         std::string& outError) {
+    (void)slavePosition;
+    (void)frame;
+    outError = "EoE over mailbox for LinuxRawSocketTransport is pending full ESC mailbox integration";
+    return false;
+}
+
+std::string LinuxRawSocketTransport::lastError() const { return error_; }
+std::uint16_t LinuxRawSocketTransport::lastWorkingCounter() const { return lastWorkingCounter_; }
+
+} // namespace oec

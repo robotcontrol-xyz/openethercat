@@ -1,0 +1,7 @@
+{
+  "entries": [
+    { "alStatusCode": "0x0011", "action": "RetryTransition" },
+    { "alStatusCode": "0x0017", "action": "Reconfigure" },
+    { "alStatusCode": "0x0014", "action": "Failover" }
+  ]
+}
