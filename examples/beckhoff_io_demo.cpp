@@ -4,10 +4,12 @@
  */
 
 #include <chrono>
+#include <csignal>
 #include <iostream>
 #include <memory>
 #include <string>
 #include <thread>
+#include <atomic>
 
 #include "openethercat/config/config_loader.hpp"
 #include "openethercat/master/ethercat_master.hpp"
@@ -16,7 +18,17 @@
 
 using namespace std::chrono_literals;
 
+namespace {
+std::atomic_bool gStopRequested{false};
+
+void handleSignal(int) {
+    gStopRequested.store(true);
+}
+} // namespace
+
 int main(int argc, char** argv) {
+    std::signal(SIGINT, handleSignal);
+
     const std::string transportSpec = (argc > 1) ? argv[1] : "mock";
     const std::string eniPath = (argc > 2) ? argv[2] : "examples/config/beckhoff_demo.eni.xml";
     const std::string esiDir = (argc > 3) ? argv[3] : "examples/config";
@@ -69,9 +81,9 @@ int main(int argc, char** argv) {
 
     auto* mock = dynamic_cast<oec::MockTransport*>(transport.get());
     if (mock) {
-        std::cout << "Simulating EL1004 input toggles and controlling EL2004 output...\n";
-
-        for (int cycle = 0; cycle < 6; ++cycle) {
+        std::cout << "Simulating EL1004 input toggles and controlling EL2004 output. Press Ctrl-C to stop.\n";
+        int cycle = 0;
+        while (!gStopRequested.load()) {
             const bool inputState = (cycle % 2) == 1;
             mock->setInputBit(0, 0, inputState);
 
@@ -87,11 +99,14 @@ int main(int argc, char** argv) {
                       << (mock->getLastOutputBit(0, 0) ? 1 : 0) << '\n';
 
             std::this_thread::sleep_for(150ms);
+            ++cycle;
         }
     } else {
-        std::cout << "Running physical cycle mode for 10s; toggling EL2004 output to trigger EL1004 callback.\n";
+        std::cout << "Running physical cycle mode; toggling EL2004 output to trigger EL1004 callback. "
+                     "Press Ctrl-C to stop.\n";
         bool driveOutput = false;
-        for (int cycle = 0; cycle < 2000; ++cycle) {
+        int cycle = 0;
+        while (!gStopRequested.load()) {
             if ((cycle % 100) == 0) {
                 driveOutput = !driveOutput;
                 if (!master.setOutputByName("LampGreen", driveOutput)) {
@@ -107,6 +122,7 @@ int main(int argc, char** argv) {
                 return 1;
             }
             std::this_thread::sleep_for(5ms);
+            ++cycle;
         }
     }
 
