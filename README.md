@@ -41,6 +41,22 @@ cmake --build build --target docs
 
 If Doxygen is not installed, the `docs` target prints an installation hint.
 
+## Debian packages
+
+The project supports CPack component-based Debian packaging with:
+- Runtime package: `libopenethercat`
+- Development package: `openethercat-dev`
+
+Generate packages:
+
+```bash
+cmake -S . -B build -DOEC_ENABLE_PACKAGING=ON -DBUILD_SHARED_LIBS=ON
+cmake --build build
+cpack --config build/CPackConfig.cmake -G DEB
+```
+
+Artifacts are emitted in `build/` as `.deb` files, one for each component.
+
 ## Run example
 
 ```bash

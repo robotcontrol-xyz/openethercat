@@ -4,10 +4,14 @@ project(openEtherCAT VERSION 0.1.0 LANGUAGES CXX)
 option(OEC_BUILD_EXAMPLES "Build examples" ON)
 option(OEC_BUILD_TESTS "Build tests" ON)
 option(OEC_BUILD_DOCS "Enable docs target" ON)
+option(BUILD_SHARED_LIBS "Build shared libraries" ON)
+option(OEC_ENABLE_PACKAGING "Enable install + CPack packaging support" ON)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+
+include(GNUInstallDirs)
 
 add_library(openethercat
     src/master/ethercat_master.cpp
@@ -36,6 +40,10 @@ target_include_directories(openethercat
 )
 
 target_compile_features(openethercat PUBLIC cxx_std_17)
+set_target_properties(openethercat PROPERTIES
+    VERSION ${PROJECT_VERSION}
+    SOVERSION ${PROJECT_VERSION_MAJOR}
+)
 
 target_compile_options(openethercat
     PRIVATE
@@ -116,7 +124,79 @@ if(OEC_BUILD_DOCS)
         add_custom_target(docs
             COMMAND ${CMAKE_COMMAND} -E echo "Doxygen not found. Install doxygen and re-run this target."
             COMMENT "Docs target placeholder"
-            VERBATIM
+        VERBATIM
         )
     endif()
+endif()
+
+if(OEC_ENABLE_PACKAGING)
+    include(CMakePackageConfigHelpers)
+
+    set(OEC_INSTALL_CMAKEDIR "${CMAKE_INSTALL_LIBDIR}/cmake/openethercat")
+
+    configure_package_config_file(
+        "${CMAKE_CURRENT_SOURCE_DIR}/cmake/openethercatConfig.cmake.in"
+        "${CMAKE_CURRENT_BINARY_DIR}/openethercatConfig.cmake"
+        INSTALL_DESTINATION "${OEC_INSTALL_CMAKEDIR}"
+    )
+
+    write_basic_package_version_file(
+        "${CMAKE_CURRENT_BINARY_DIR}/openethercatConfigVersion.cmake"
+        VERSION ${PROJECT_VERSION}
+        COMPATIBILITY SameMajorVersion
+    )
+
+    install(TARGETS openethercat
+        EXPORT openethercatTargets
+        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT runtime NAMELINK_COMPONENT dev
+        ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT dev
+        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} COMPONENT runtime
+        INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+    )
+
+    install(DIRECTORY include/
+        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+        COMPONENT dev
+    )
+
+    install(EXPORT openethercatTargets
+        FILE openethercatTargets.cmake
+        NAMESPACE openethercat::
+        DESTINATION "${OEC_INSTALL_CMAKEDIR}"
+        COMPONENT dev
+    )
+
+    install(FILES
+        "${CMAKE_CURRENT_BINARY_DIR}/openethercatConfig.cmake"
+        "${CMAKE_CURRENT_BINARY_DIR}/openethercatConfigVersion.cmake"
+        DESTINATION "${OEC_INSTALL_CMAKEDIR}"
+        COMPONENT dev
+    )
+
+    set(CPACK_GENERATOR "DEB")
+    set(CPACK_DEB_COMPONENT_INSTALL ON)
+    set(CPACK_DEBIAN_FILE_NAME DEB-DEFAULT)
+    set(CPACK_PACKAGE_NAME "openethercat")
+    set(CPACK_PACKAGE_VENDOR "OpenEtherCAT")
+    set(CPACK_PACKAGE_CONTACT "OpenEtherCAT Maintainers")
+    set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
+    set(CPACK_DEBIAN_PACKAGE_MAINTAINER "OpenEtherCAT Maintainers")
+    set(CPACK_COMPONENTS_ALL runtime dev)
+
+    set(CPACK_COMPONENT_RUNTIME_DISPLAY_NAME "OpenEtherCAT Runtime")
+    set(CPACK_COMPONENT_RUNTIME_DESCRIPTION "Runtime shared library for OpenEtherCAT")
+    set(CPACK_COMPONENT_DEV_DISPLAY_NAME "OpenEtherCAT Development Files")
+    set(CPACK_COMPONENT_DEV_DESCRIPTION "Headers and CMake package files for OpenEtherCAT")
+    set(CPACK_COMPONENT_DEV_DEPENDS runtime)
+    set(CPACK_DEBIAN_ENABLE_COMPONENT_DEPENDS ON)
+
+    set(CPACK_DEBIAN_RUNTIME_PACKAGE_NAME "libopenethercat")
+    set(CPACK_DEBIAN_RUNTIME_PACKAGE_SECTION "libs")
+    set(CPACK_DEBIAN_RUNTIME_PACKAGE_SHLIBDEPS ON)
+
+    set(CPACK_DEBIAN_DEV_PACKAGE_NAME "openethercat-dev")
+    set(CPACK_DEBIAN_DEV_PACKAGE_SECTION "libdevel")
+    set(CPACK_DEBIAN_DEV_PACKAGE_DEPENDS "libopenethercat (= ${CPACK_PACKAGE_VERSION})")
+
+    include(CPack)
 endif()
