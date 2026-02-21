@@ -1,13 +1,13 @@
 # Use Cases
 
-## 1) Simple digital I/O station (EK1100 + EL1008 + EL2008)
+## 1) Simple digital I/O station (EK1100 + EL1004 + EL2004)
 
 ```mermaid
 flowchart LR
-    Input[EL1008 Inputs] --> Map[Logical Signal Map]
+    Input[EL1004 Inputs] --> Map[Logical Signal Map]
     Map --> AppLogic[App Callback Logic]
     AppLogic --> Map2[Logical Output Mapping]
-    Map2 --> Output[EL2008 Outputs]
+    Map2 --> Output[EL2004 Outputs]
 ```
 
 Reference example: `examples/beckhoff_io_demo.cpp`.

@@ -1,5 +1,5 @@
 <EsiCatalog>
   <Device name="EK1100" vendorId="0x00000002" productCode="0x044c2c52"/>
-  <Device name="EL1008" vendorId="0x00000002" productCode="0x03f03052"/>
-  <Device name="EL2008" vendorId="0x00000002" productCode="0x07d83052"/>
+  <Device name="EL1004" vendorId="0x00000002" productCode="0x03ec3052"/>
+  <Device name="EL2004" vendorId="0x00000002" productCode="0x07d43052"/>
 </EsiCatalog>

@@ -2,12 +2,12 @@
   <ProcessImage inputBytes="1" outputBytes="1"/>
   <Slaves>
     <Slave name="EK1100" alias="0" position="0"/>
-    <Slave name="EL1008" alias="0" position="1"/>
-    <Slave name="EL2008" alias="0" position="2"/>
+    <Slave name="EL1004" alias="0" position="1"/>
+    <Slave name="EL2004" alias="0" position="2"/>
   </Slaves>
   <Signals>
-    <Signal logicalName="StartButton" direction="input" slaveName="EL1008" byteOffset="0" bitOffset="0"/>
-    <Signal logicalName="StopButton" direction="input" slaveName="EL1008" byteOffset="0" bitOffset="1"/>
-    <Signal logicalName="LampGreen" direction="output" slaveName="EL2008" byteOffset="0" bitOffset="0"/>
+    <Signal logicalName="StartButton" direction="input" slaveName="EL1004" byteOffset="0" bitOffset="0"/>
+    <Signal logicalName="StopButton" direction="input" slaveName="EL1004" byteOffset="0" bitOffset="1"/>
+    <Signal logicalName="LampGreen" direction="output" slaveName="EL2004" byteOffset="0" bitOffset="0"/>
   </Signals>
 </Network>

@@ -19,12 +19,12 @@ int main(int argc, char** argv) {
     cfg.processImageInputBytes = 1;
     cfg.processImageOutputBytes = 1;
     cfg.slaves = {
-        {.name = "EL1008", .alias = 0, .position = 1, .vendorId = 0x2, .productCode = 0x03f03052},
-        {.name = "EL2008", .alias = 0, .position = 2, .vendorId = 0x2, .productCode = 0x07d83052},
+        {.name = "EL1004", .alias = 0, .position = 1, .vendorId = 0x2, .productCode = 0x03ec3052},
+        {.name = "EL2004", .alias = 0, .position = 2, .vendorId = 0x2, .productCode = 0x07d43052},
     };
     cfg.signals = {
-        {.logicalName = "InputA", .direction = oec::SignalDirection::Input, .slaveName = "EL1008", .byteOffset = 0, .bitOffset = 0},
-        {.logicalName = "OutputA", .direction = oec::SignalDirection::Output, .slaveName = "EL2008", .byteOffset = 0, .bitOffset = 0},
+        {.logicalName = "InputA", .direction = oec::SignalDirection::Input, .slaveName = "EL1004", .byteOffset = 0, .bitOffset = 0},
+        {.logicalName = "OutputA", .direction = oec::SignalDirection::Output, .slaveName = "EL2004", .byteOffset = 0, .bitOffset = 0},
     };
 
     std::string transportError;
@@ -58,8 +58,8 @@ int main(int argc, char** argv) {
 
     if (auto* mock = dynamic_cast<oec::MockTransport*>(transport.get())) {
         mock->setDiscoveredSlaves({
-            {.position = 1, .vendorId = 0x2, .productCode = 0x03f03052, .online = true},
-            {.position = 2, .vendorId = 0x2, .productCode = 0x07d83052, .online = true},
+            {.position = 1, .vendorId = 0x2, .productCode = 0x03ec3052, .online = true},
+            {.position = 2, .vendorId = 0x2, .productCode = 0x07d43052, .online = true},
         });
     }
     std::string topoErr;

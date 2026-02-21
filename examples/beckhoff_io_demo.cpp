@@ -69,7 +69,7 @@ int main(int argc, char** argv) {
 
     auto* mock = dynamic_cast<oec::MockTransport*>(transport.get());
     if (mock) {
-        std::cout << "Simulating EL1008 input toggles and controlling EL2008 output...\n";
+        std::cout << "Simulating EL1004 input toggles and controlling EL2004 output...\n";
 
         for (int cycle = 0; cycle < 6; ++cycle) {
             const bool inputState = (cycle % 2) == 1;
@@ -82,14 +82,14 @@ int main(int argc, char** argv) {
             }
 
             std::cout << "Cycle " << cycle
-                      << ", EL1008.StartButton=" << (inputState ? 1 : 0)
-                      << ", EL2008.LampGreen(out byte0/bit0)="
+                      << ", EL1004.StartButton=" << (inputState ? 1 : 0)
+                      << ", EL2004.LampGreen(out byte0/bit0)="
                       << (mock->getLastOutputBit(0, 0) ? 1 : 0) << '\n';
 
             std::this_thread::sleep_for(150ms);
         }
     } else {
-        std::cout << "Running physical cycle mode for 10s; press EL1008 input to trigger callback.\n";
+        std::cout << "Running physical cycle mode for 10s; press EL1004 input to trigger callback.\n";
         for (int cycle = 0; cycle < 2000; ++cycle) {
             if (!master.runCycle()) {
                 std::cerr << "Cycle failed: " << master.lastError() << '\n';

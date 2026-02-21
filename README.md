@@ -23,7 +23,7 @@ This repository provides:
 - Distributed clock sync controller with filtered offset, PI correction, and jitter stats.
 - Topology manager with hot-connect/missing detection and redundancy health checks.
 - Mock HIL soak harness for repeated fault-injection and recovery validation.
-- Example app for Beckhoff EK1100 + EL1008 + EL2008 style topology.
+- Example app for Beckhoff EK1100 + EL1004 + EL2004 style topology.
 
 This is an architectural foundation and demonstration.
 Implemented now: startup state sequence to OP, per-slave diagnostics/recovery, CoE service APIs, DC correction algorithm, and topology/redundancy management APIs.
