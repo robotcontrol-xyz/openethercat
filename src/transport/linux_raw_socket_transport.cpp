@@ -16,6 +16,7 @@
 #include <vector>
 #include <chrono>
 #include <thread>
+#include <map>
 
 #include <linux/if_packet.h>
 #include <net/if.h>
@@ -1180,6 +1181,8 @@ bool LinuxRawSocketTransport::configureProcessImage(const NetworkConfiguration& 
     for (const auto& s : config.slaves) {
         slaveByName[s.name] = s.position;
     }
+    std::unordered_map<std::uint16_t, std::vector<SignalBinding>> outputSignalsBySlave;
+    std::unordered_map<std::uint16_t, std::vector<SignalBinding>> inputSignalsBySlave;
 
     std::unordered_set<std::uint16_t> outputSlaves;
     std::unordered_set<std::uint16_t> inputSlaves;
@@ -1190,10 +1193,32 @@ bool LinuxRawSocketTransport::configureProcessImage(const NetworkConfiguration& 
         }
         if (signal.direction == SignalDirection::Output) {
             outputSlaves.insert(it->second);
+            outputSignalsBySlave[it->second].push_back(signal);
         } else {
             inputSlaves.insert(it->second);
+            inputSignalsBySlave[it->second].push_back(signal);
         }
     }
+
+    auto buildDefaultEntries = [](const std::vector<SignalBinding>& signals,
+                                  bool outputDirection) -> std::vector<PdoMappingEntry> {
+        // For simple EL1xxx/EL2xxx terminals, channel bits are typically mapped at
+        // 0x6000:1..N (inputs) and 0x7000:1..N (outputs).
+        std::map<std::uint8_t, PdoMappingEntry> ordered;
+        for (const auto& sig : signals) {
+            PdoMappingEntry e;
+            e.index = outputDirection ? 0x7000U : 0x6000U;
+            e.subIndex = static_cast<std::uint8_t>(sig.bitOffset + 1U);
+            e.bitLength = 1U;
+            ordered[e.subIndex] = e;
+        }
+        std::vector<PdoMappingEntry> out;
+        out.reserve(ordered.size());
+        for (const auto& kv : ordered) {
+            out.push_back(kv.second);
+        }
+        return out;
+    };
 
     std::uint32_t outputLogical = logicalAddress_;
     std::uint32_t inputLogical = logicalAddress_ + static_cast<std::uint32_t>(config.processImageOutputBytes);
@@ -1211,6 +1236,26 @@ bool LinuxRawSocketTransport::configureProcessImage(const NetworkConfiguration& 
             std::cerr << "[oec-map] slave=" << position
                       << " SM2(start=0x" << std::hex << smStart
                       << ", len=" << std::dec << smLen << ")\n";
+        }
+        if (smLen == 0U) {
+            const auto sigIt = outputSignalsBySlave.find(position);
+            if (sigIt != outputSignalsBySlave.end() && !sigIt->second.empty()) {
+                std::string pdoError;
+                const auto entries = buildDefaultEntries(sigIt->second, true);
+                if (configurePdo(position, 0x1600U, entries, pdoError)) {
+                    if (!readSm(position, 2U, smStart, smLen)) {
+                        return false;
+                    }
+                    if (traceMap) {
+                        std::cerr << "[oec-map] slave=" << position
+                                  << " SM2 re-read after default RxPDO config (start=0x" << std::hex << smStart
+                                  << ", len=" << std::dec << smLen << ")\n";
+                    }
+                } else if (traceMap) {
+                    std::cerr << "[oec-map] slave=" << position
+                              << " default RxPDO config failed: " << pdoError << '\n';
+                }
+            }
         }
         if (smLen == 0U) {
             continue;
@@ -1238,6 +1283,26 @@ bool LinuxRawSocketTransport::configureProcessImage(const NetworkConfiguration& 
             std::cerr << "[oec-map] slave=" << position
                       << " SM3(start=0x" << std::hex << smStart
                       << ", len=" << std::dec << smLen << ")\n";
+        }
+        if (smLen == 0U) {
+            const auto sigIt = inputSignalsBySlave.find(position);
+            if (sigIt != inputSignalsBySlave.end() && !sigIt->second.empty()) {
+                std::string pdoError;
+                const auto entries = buildDefaultEntries(sigIt->second, false);
+                if (configurePdo(position, 0x1A00U, entries, pdoError)) {
+                    if (!readSm(position, 3U, smStart, smLen)) {
+                        return false;
+                    }
+                    if (traceMap) {
+                        std::cerr << "[oec-map] slave=" << position
+                                  << " SM3 re-read after default TxPDO config (start=0x" << std::hex << smStart
+                                  << ", len=" << std::dec << smLen << ")\n";
+                    }
+                } else if (traceMap) {
+                    std::cerr << "[oec-map] slave=" << position
+                              << " default TxPDO config failed: " << pdoError << '\n';
+                }
+            }
         }
         if (smLen == 0U) {
             continue;
