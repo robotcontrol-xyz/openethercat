@@ -196,7 +196,8 @@ bool sendAndReceiveDatagram(
             continue;
         }
         if (parsed->workingCounter < expectedWorkingCounter) {
-            outError = "working counter too low";
+            outError = "working counter too low (got=" + std::to_string(parsed->workingCounter) +
+                       ", expected>=" + std::to_string(expectedWorkingCounter) + ")";
             return false;
         }
 

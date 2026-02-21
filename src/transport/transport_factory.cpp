@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdlib>
 
 #include "openethercat/transport/linux_raw_socket_transport.hpp"
 #include "openethercat/transport/mock_transport.hpp"
@@ -104,7 +105,18 @@ std::unique_ptr<ITransport> TransportFactory::create(const TransportFactoryConfi
 
     transport->setCycleTimeoutMs(config.cycleTimeoutMs);
     transport->setLogicalAddress(config.logicalAddress);
-    transport->setExpectedWorkingCounter(config.expectedWorkingCounter);
+    std::uint16_t expectedWorkingCounter = config.expectedWorkingCounter;
+    if (const char* env = std::getenv("OEC_EXPECTED_WKC")) {
+        try {
+            const auto parsed = std::stoul(env);
+            if (parsed <= 0xFFFFUL) {
+                expectedWorkingCounter = static_cast<std::uint16_t>(parsed);
+            }
+        } catch (...) {
+            // Ignore invalid env var and fall back to config value.
+        }
+    }
+    transport->setExpectedWorkingCounter(expectedWorkingCounter);
     transport->setMaxFramesPerCycle(config.maxFramesPerCycle);
     transport->enableRedundancy(config.enableRedundancy);
     return transport;
