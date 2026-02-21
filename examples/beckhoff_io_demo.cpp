@@ -89,7 +89,12 @@ int main(int argc, char** argv) {
             std::this_thread::sleep_for(150ms);
         }
     } else {
-        std::cout << "Running physical cycle mode for 10s; press EL1004 input to trigger callback.\n";
+        std::cout << "Running physical cycle mode for 10s; priming EL2004 output to trigger EL1004 callback.\n";
+        if (!master.setOutputByName("LampGreen", true)) {
+            std::cerr << "Failed to prime output: " << master.lastError() << '\n';
+            master.stop();
+            return 1;
+        }
         for (int cycle = 0; cycle < 2000; ++cycle) {
             if (!master.runCycle()) {
                 std::cerr << "Cycle failed: " << master.lastError() << '\n';
