@@ -71,6 +71,7 @@ Artifacts are emitted in `build/` as `.deb` files, one for each component.
 ./build/el6692_bridge_demo
 ./build/el6692_structured_bridge_demo
 ./build/el6751_can_bridge_demo
+./build/physical_topology_scan_demo linux:eth0
 ```
 
 The demo uses `MockTransport` so it runs without root and without EtherCAT hardware.
@@ -83,6 +84,20 @@ Real NIC demo (requires root and EtherCAT interface):
 
 ```bash
 sudo ./build/linux_raw_socket_cycle_demo eth0
+```
+
+Examples that support runtime transport selection now accept:
+- `mock`
+- `linux:<ifname>`
+- `linux:<ifname_primary>,<ifname_secondary>`
+
+Examples:
+
+```bash
+./build/beckhoff_io_demo mock
+sudo ./build/beckhoff_io_demo linux:eth0
+sudo ./build/coe_dc_topology_demo linux:eth0
+sudo ./build/physical_topology_scan_demo linux:eth0
 ```
 
 ## Architecture summary

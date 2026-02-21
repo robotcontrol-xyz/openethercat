@@ -31,6 +31,7 @@ add_library(openethercat
     src/transport/coe_mailbox_protocol.cpp
     src/transport/ethercat_frame.cpp
     src/transport/mock_transport.cpp
+    src/transport/transport_factory.cpp
 )
 
 target_include_directories(openethercat
@@ -86,6 +87,9 @@ if(OEC_BUILD_EXAMPLES)
 
     add_executable(el6751_can_bridge_demo examples/el6751_can_bridge_demo.cpp)
     target_link_libraries(el6751_can_bridge_demo PRIVATE openethercat)
+
+    add_executable(physical_topology_scan_demo examples/physical_topology_scan_demo.cpp)
+    target_link_libraries(physical_topology_scan_demo PRIVATE openethercat)
 endif()
 
 if(OEC_BUILD_TESTS)
