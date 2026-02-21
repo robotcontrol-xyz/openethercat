@@ -13,6 +13,7 @@ namespace oec {
 enum class SlaveState : std::uint8_t {
     Init = 0x01,
     PreOp = 0x02,
+    Bootstrap = 0x03,
     SafeOp = 0x04,
     Op = 0x08,
 };
@@ -23,6 +24,8 @@ inline const char* toString(SlaveState state) {
         return "INIT";
     case SlaveState::PreOp:
         return "PRE-OP";
+    case SlaveState::Bootstrap:
+        return "BOOTSTRAP";
     case SlaveState::SafeOp:
         return "SAFE-OP";
     case SlaveState::Op:

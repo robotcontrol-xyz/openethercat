@@ -104,6 +104,9 @@ bool decodeAlState(std::uint16_t rawState, SlaveState& out) {
     case 0x02:
         out = SlaveState::PreOp;
         return true;
+    case 0x03:
+        out = SlaveState::Bootstrap;
+        return true;
     case 0x04:
         out = SlaveState::SafeOp;
         return true;
