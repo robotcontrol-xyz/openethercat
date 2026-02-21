@@ -18,6 +18,30 @@ Class responsibility mapping:
 - `EthercatMaster`: orchestrates startup, cyclic exchange, and callback dispatch.
 - `IoMapper` (inside master): resolves `StartButton` and `LampGreen`.
 
+Startup mapping notes for Linux transport:
+- `EthercatMaster::start()` transitions network to PRE-OP first.
+- `LinuxRawSocketTransport::configureProcessImage(...)` reads SM2/SM3 from each configured I/O slave.
+- Transport programs FMMU windows for output (SM2/write) and input (SM3/read) paths.
+- Then startup continues to SAFE-OP and OP.
+
+```mermaid
+sequenceDiagram
+    participant App
+    participant M as EthercatMaster
+    participant T as LinuxRawSocketTransport
+    participant S as EL1004/EL2004 ESC
+
+    App->>M: start()
+    M->>M: INIT -> PRE-OP
+    M->>T: configureProcessImage(config)
+    T->>S: APRD SM2/SM3
+    S-->>T: start/length
+    T->>S: APWR FMMU config
+    S-->>T: ack
+    T-->>M: mapping configured
+    M->>M: SAFE-OP -> OP
+```
+
 ```cpp
 oec::TransportFactoryConfig tc;
 tc.mockInputBytes = config.processImageInputBytes;

@@ -51,6 +51,7 @@ public:
     bool pollEmergency(EmergencyMessage& outEmergency) override;
     bool discoverTopology(TopologySnapshot& outSnapshot, std::string& outError) override;
     bool isRedundancyLinkHealthy(std::string& outError) override;
+    bool configureProcessImage(const NetworkConfiguration& config, std::string& outError) override;
     bool foeRead(std::uint16_t slavePosition, const FoERequest& request,
                  FoEResponse& outResponse, std::string& outError) override;
     bool foeWrite(std::uint16_t slavePosition, const FoERequest& request,

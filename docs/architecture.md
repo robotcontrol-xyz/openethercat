@@ -200,6 +200,43 @@ sequenceDiagram
     M-->>APP: cycle result + diagnostics
 ```
 
+## Linux PDO mapping model (current)
+
+Current Linux startup mapping is hybrid:
+- Logical signal intent comes from configuration (`NetworkConfiguration`).
+- Sync manager base/length (`SM2` for outputs, `SM3` for inputs) is read from each slave ESC at startup.
+- FMMU entries are programmed from those SM windows to the master's logical process image.
+- Full dynamic PDO descriptor discovery (`0x1C12/0x1C13`, `0x16xx/0x1Axx`) is not yet auto-derived.
+
+```mermaid
+flowchart LR
+    CFG[ENI/ESI Config\nSignalDirection + SlaveName] --> MASTER[EthercatMaster::start]
+    MASTER --> PREOP[Transition INIT->PRE-OP]
+    PREOP --> MAP[Transport configureProcessImage]
+    MAP --> SMREAD[Read SM2/SM3 from ESC]
+    SMREAD --> FMMU[Program FMMU entries]
+    FMMU --> SAFEOP[Transition SAFE-OP]
+    SAFEOP --> OP[Transition OP]
+```
+
+```mermaid
+sequenceDiagram
+    participant M as EthercatMaster
+    participant T as LinuxRawSocketTransport
+    participant S as Slave ESC
+
+    M->>T: configureProcessImage(config)
+    T->>S: APRD SM2 (outputs)
+    S-->>T: SM2 start/len
+    T->>S: APWR FMMU (write direction)
+    S-->>T: ack
+    T->>S: APRD SM3 (inputs)
+    S-->>T: SM3 start/len
+    T->>S: APWR FMMU (read direction)
+    S-->>T: ack
+    T-->>M: success/failure
+```
+
 ## Recovery decision flow
 
 ```mermaid

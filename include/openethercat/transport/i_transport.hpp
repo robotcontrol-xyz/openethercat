@@ -21,6 +21,7 @@ struct EmergencyMessage;
 struct TopologySnapshot;
 struct FoERequest;
 struct FoEResponse;
+struct NetworkConfiguration;
 
 /**
  * @brief Abstract transport interface used by the EtherCAT master.
@@ -83,6 +84,7 @@ public:
     virtual bool pollEmergency(EmergencyMessage&) { return false; }
     virtual bool discoverTopology(TopologySnapshot&, std::string&) { return false; }
     virtual bool isRedundancyLinkHealthy(std::string&) { return false; }
+    virtual bool configureProcessImage(const NetworkConfiguration&, std::string&) { return true; }
     virtual bool foeRead(std::uint16_t, const FoERequest&, FoEResponse&, std::string&) { return false; }
     virtual bool foeWrite(std::uint16_t, const FoERequest&, const std::vector<std::uint8_t>&, std::string&) {
         return false;

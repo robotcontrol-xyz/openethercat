@@ -71,8 +71,19 @@ bool EthercatMaster::start() {
     // Optionally drive a full AL startup ladder so cyclic exchange starts from OP.
     if (stateMachineOptions_.enable) {
         if (!transitionNetworkTo(SlaveState::Init) ||
-            !transitionNetworkTo(SlaveState::PreOp) ||
-            !transitionNetworkTo(SlaveState::SafeOp) ||
+            !transitionNetworkTo(SlaveState::PreOp)) {
+            transport_.close();
+            return false;
+        }
+
+        std::string processMapError;
+        if (!transport_.configureProcessImage(config_, processMapError)) {
+            setError("Failed to configure process image mapping: " + processMapError);
+            transport_.close();
+            return false;
+        }
+
+        if (!transitionNetworkTo(SlaveState::SafeOp) ||
             !transitionNetworkTo(SlaveState::Op)) {
             transport_.close();
             return false;
