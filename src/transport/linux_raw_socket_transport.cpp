@@ -41,6 +41,14 @@ constexpr std::uint16_t kRegisterAlStatus = 0x0130;
 constexpr std::uint16_t kRegisterAlStatusCode = 0x0134;
 constexpr std::uint16_t kRegisterEscType = 0x0008;
 constexpr std::uint16_t kRegisterEscRevision = 0x000A;
+constexpr std::uint16_t kRegisterEepControlStatus = 0x0502;
+constexpr std::uint16_t kRegisterEepAddress = 0x0504;
+constexpr std::uint16_t kRegisterEepData = 0x0508;
+constexpr std::uint16_t kEepCommandRead = 0x0100;
+constexpr std::uint16_t kEepBusy = 0x8000;
+constexpr std::uint16_t kEepErrorMask = 0x7800;
+constexpr std::uint16_t kSiiWordVendorId = 0x0008;
+constexpr std::uint16_t kSiiWordProductCode = 0x000A;
 constexpr std::uint16_t kAlStateMask = 0x000F;
 
 bool openEthercatInterfaceSocket(const std::string& ifname,
@@ -844,6 +852,90 @@ bool LinuxRawSocketTransport::discoverTopology(TopologySnapshot& outSnapshot, st
         // APRD/APWR use signed auto-increment addressing: 0, -1, -2, ...
         return static_cast<std::uint16_t>(0U - position);
     };
+    auto readAt = [&](std::uint16_t adp, std::uint16_t ado, std::size_t size,
+                      std::vector<std::uint8_t>& out) -> bool {
+        const auto currentIndex = datagramIndex_++;
+        EthercatDatagramRequest request;
+        request.command = kCommandAprd;
+        request.datagramIndex = currentIndex;
+        request.adp = adp;
+        request.ado = ado;
+        request.payload.assign(size, 0U);
+
+        std::uint16_t wkc = 0;
+        std::vector<std::uint8_t> payload;
+        if (!sendAndReceiveDatagram(socketFd_, ifIndex_, timeoutMs_, maxFramesPerCycle_,
+                                    expectedWorkingCounter_, destinationMac_, sourceMac_,
+                                    request, wkc, payload, error_)) {
+            return false;
+        }
+        if (payload.size() < size) {
+            return false;
+        }
+        out = std::move(payload);
+        return true;
+    };
+    auto writeAt = [&](std::uint16_t adp, std::uint16_t ado, const std::vector<std::uint8_t>& value) -> bool {
+        const auto currentIndex = datagramIndex_++;
+        EthercatDatagramRequest request;
+        request.command = kCommandApwr;
+        request.datagramIndex = currentIndex;
+        request.adp = adp;
+        request.ado = ado;
+        request.payload = value;
+
+        std::uint16_t wkc = 0;
+        std::vector<std::uint8_t> payload;
+        return sendAndReceiveDatagram(socketFd_, ifIndex_, timeoutMs_, maxFramesPerCycle_,
+                                      expectedWorkingCounter_, destinationMac_, sourceMac_,
+                                      request, wkc, payload, error_);
+    };
+    auto readSiiWord32 = [&](std::uint16_t adp, std::uint16_t wordAddress, std::uint32_t& outValue) -> bool {
+        const std::vector<std::uint8_t> addrPayload = {
+            static_cast<std::uint8_t>(wordAddress & 0xFFU),
+            static_cast<std::uint8_t>((wordAddress >> 8U) & 0xFFU),
+            0x00U,
+            0x00U,
+        };
+        if (!writeAt(adp, kRegisterEepAddress, addrPayload)) {
+            return false;
+        }
+        const std::vector<std::uint8_t> cmdPayload = {
+            static_cast<std::uint8_t>(kEepCommandRead & 0xFFU),
+            static_cast<std::uint8_t>((kEepCommandRead >> 8U) & 0xFFU),
+        };
+        if (!writeAt(adp, kRegisterEepControlStatus, cmdPayload)) {
+            return false;
+        }
+
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
+        while (std::chrono::steady_clock::now() < deadline) {
+            std::vector<std::uint8_t> statusPayload;
+            if (!readAt(adp, kRegisterEepControlStatus, 2, statusPayload)) {
+                return false;
+            }
+            const std::uint16_t status = static_cast<std::uint16_t>(statusPayload[0]) |
+                                         (static_cast<std::uint16_t>(statusPayload[1]) << 8U);
+            if ((status & kEepBusy) != 0U) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                continue;
+            }
+            if ((status & kEepErrorMask) != 0U) {
+                return false;
+            }
+
+            std::vector<std::uint8_t> dataPayload;
+            if (!readAt(adp, kRegisterEepData, 4, dataPayload)) {
+                return false;
+            }
+            outValue = static_cast<std::uint32_t>(dataPayload[0]) |
+                       (static_cast<std::uint32_t>(dataPayload[1]) << 8U) |
+                       (static_cast<std::uint32_t>(dataPayload[2]) << 16U) |
+                       (static_cast<std::uint32_t>(dataPayload[3]) << 24U);
+            return true;
+        }
+        return false;
+    };
 
     for (std::uint16_t position = 0; position < 256; ++position) {
         const std::uint16_t adp = autoIncAddress(position);
@@ -851,31 +943,8 @@ bool LinuxRawSocketTransport::discoverTopology(TopologySnapshot& outSnapshot, st
         info.position = position;
         info.online = false;
 
-        const auto readAt = [&](std::uint16_t ado, std::size_t size, std::vector<std::uint8_t>& out) -> bool {
-            const auto currentIndex = datagramIndex_++;
-            EthercatDatagramRequest request;
-            request.command = kCommandAprd;
-            request.datagramIndex = currentIndex;
-            request.adp = adp;
-            request.ado = ado;
-            request.payload.assign(size, 0U);
-
-            std::uint16_t wkc = 0;
-            std::vector<std::uint8_t> payload;
-            if (!sendAndReceiveDatagram(socketFd_, ifIndex_, timeoutMs_, maxFramesPerCycle_,
-                                        expectedWorkingCounter_, destinationMac_, sourceMac_,
-                                        request, wkc, payload, error_)) {
-                return false;
-            }
-            if (payload.size() < size) {
-                return false;
-            }
-            out = std::move(payload);
-            return true;
-        };
-
         std::vector<std::uint8_t> alPayload;
-        if (!readAt(kRegisterAlStatus, 2, alPayload)) {
+        if (!readAt(adp, kRegisterAlStatus, 2, alPayload)) {
             if (position == 0) {
                 continue;
             }
@@ -883,14 +952,21 @@ bool LinuxRawSocketTransport::discoverTopology(TopologySnapshot& outSnapshot, st
             break;
         }
         info.online = true;
+        const auto alRaw = static_cast<std::uint16_t>(alPayload[0]) |
+                           (static_cast<std::uint16_t>(alPayload[1]) << 8U);
+        SlaveState decodedState = SlaveState::Init;
+        info.alStateValid = decodeAlState(alRaw, decodedState);
+        if (info.alStateValid) {
+            info.alState = decodedState;
+        }
 
         std::vector<std::uint8_t> escTypePayload;
-        if (readAt(kRegisterEscType, 2, escTypePayload) && escTypePayload.size() >= 2) {
+        if (readAt(adp, kRegisterEscType, 2, escTypePayload) && escTypePayload.size() >= 2) {
             info.escType = static_cast<std::uint16_t>(escTypePayload[0]) |
                            (static_cast<std::uint16_t>(escTypePayload[1]) << 8U);
         }
         std::vector<std::uint8_t> escRevisionPayload;
-        if (readAt(kRegisterEscRevision, 2, escRevisionPayload) && escRevisionPayload.size() >= 2) {
+        if (readAt(adp, kRegisterEscRevision, 2, escRevisionPayload) && escRevisionPayload.size() >= 2) {
             info.escRevision = static_cast<std::uint16_t>(escRevisionPayload[0]) |
                                (static_cast<std::uint16_t>(escRevisionPayload[1]) << 8U);
         }
@@ -923,6 +999,17 @@ bool LinuxRawSocketTransport::discoverTopology(TopologySnapshot& outSnapshot, st
                                (static_cast<std::uint32_t>(objectData[3]) << 24U);
         }
         info.identityFromCoe = hasVendor && hasProduct;
+        if (!info.identityFromCoe) {
+            std::uint32_t siiVendor = 0U;
+            std::uint32_t siiProduct = 0U;
+            const bool siiVendorOk = readSiiWord32(adp, kSiiWordVendorId, siiVendor);
+            const bool siiProductOk = readSiiWord32(adp, kSiiWordProductCode, siiProduct);
+            if (siiVendorOk && siiProductOk) {
+                info.vendorId = siiVendor;
+                info.productCode = siiProduct;
+                info.identityFromSii = true;
+            }
+        }
 
         outSnapshot.slaves.push_back(info);
     }

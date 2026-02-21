@@ -57,10 +57,11 @@ int main(int argc, char** argv) {
     std::cout << "Discovered " << snapshot.slaves.size() << " slave(s)"
               << ", redundancy_healthy=" << (snapshot.redundancyHealthy ? "true" : "false") << '\n';
 
-    std::cout << "Position  Online  VendorId    ProductCode  EscType  EscRev  IdentitySource\n";
+    std::cout << "Position  Online  ALState  VendorId    ProductCode  EscType  EscRev  IdentitySource\n";
     for (const auto& slave : snapshot.slaves) {
         std::cout << std::setw(8) << std::dec << slave.position << "  "
                   << std::setw(6) << (slave.online ? "yes" : "no") << "  "
+                  << std::setw(7) << (slave.alStateValid ? oec::toString(slave.alState) : "UNK") << "  "
                   << "0x" << std::hex << std::setw(8) << std::setfill('0') << slave.vendorId << std::setfill(' ')
                   << "  "
                   << "0x" << std::hex << std::setw(8) << std::setfill('0') << slave.productCode
@@ -69,7 +70,7 @@ int main(int argc, char** argv) {
                   << std::setfill(' ') << "  "
                   << "0x" << std::hex << std::setw(4) << std::setfill('0') << slave.escRevision
                   << std::setfill(' ') << std::dec << "  "
-                  << (slave.identityFromCoe ? "CoE-0x1018" : "n/a")
+                  << (slave.identityFromCoe ? "CoE-0x1018" : (slave.identityFromSii ? "SII-EEPROM" : "n/a"))
                   << '\n';
     }
 

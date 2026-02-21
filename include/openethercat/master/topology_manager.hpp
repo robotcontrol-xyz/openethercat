@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "openethercat/config/eni_esi_models.hpp"
+#include "openethercat/core/slave_state.hpp"
 #include "openethercat/transport/i_transport.hpp"
 
 namespace oec {
@@ -24,6 +25,9 @@ struct TopologySlaveInfo {
     std::uint16_t escType = 0;
     std::uint16_t escRevision = 0;
     bool identityFromCoe = false;
+    bool identityFromSii = false;
+    bool alStateValid = false;
+    SlaveState alState = SlaveState::Init;
     bool online = false;
 };
 
