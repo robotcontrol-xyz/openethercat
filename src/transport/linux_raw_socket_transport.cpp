@@ -8,6 +8,8 @@
 #include <algorithm>
 #include <cerrno>
 #include <cstring>
+#include <cstdlib>
+#include <iostream>
 #include <unordered_map>
 #include <unordered_set>
 #include <string>
@@ -128,6 +130,27 @@ bool decodeAlState(std::uint16_t rawState, SlaveState& out) {
 std::uint16_t toAutoIncrementAddress(std::uint16_t position) {
     // EtherCAT auto-increment addresses are signed: 0, -1, -2, ...
     return static_cast<std::uint16_t>(0U - position);
+}
+
+const char* commandName(std::uint8_t cmd) {
+    switch (cmd) {
+    case kCommandLrw:
+        return "LRW";
+    case kCommandLwr:
+        return "LWR";
+    case kCommandLrd:
+        return "LRD";
+    case kCommandAprd:
+        return "APRD";
+    case kCommandApwr:
+        return "APWR";
+    case kCommandBrd:
+        return "BRD";
+    case kCommandBwr:
+        return "BWR";
+    default:
+        return "CMD";
+    }
 }
 
 bool sendAndReceiveDatagram(
@@ -322,61 +345,54 @@ bool LinuxRawSocketTransport::exchange(const std::vector<std::uint8_t>& txProces
         return false;
     };
 
-    // Fast path: single LRW frame for combined write/read process image.
-    {
-        const auto currentIndex = datagramIndex_++;
-        EthercatDatagramRequest lrw;
-        lrw.command = kCommandLrw;
-        lrw.datagramIndex = currentIndex;
-        lrw.adp = logicalLo;
-        lrw.ado = logicalHi;
-        lrw.payload = txProcessData;
+    const bool traceWkc = (std::getenv("OEC_TRACE_WKC") != nullptr);
+    const std::uint32_t inputLogicalAddress = logicalAddress_ + static_cast<std::uint32_t>(txProcessData.size());
+    const auto inputLogicalLo = static_cast<std::uint16_t>(inputLogicalAddress & 0xFFFFU);
+    const auto inputLogicalHi = static_cast<std::uint16_t>((inputLogicalAddress >> 16U) & 0xFFFFU);
 
-        std::uint16_t lrwWkc = 0;
-        std::vector<std::uint8_t> lrwPayload;
-        if (sendPrimaryOrSecondary(lrw, lrwWkc, lrwPayload)) {
-            lastWorkingCounter_ = lrwWkc;
-            rxProcessData = std::move(lrwPayload);
-            return true;
+    std::uint16_t lwrWkc = 0;
+    std::uint16_t lrdWkc = 0;
+    std::vector<std::uint8_t> lwrAck;
+    std::vector<std::uint8_t> lrdPayload;
+
+    EthercatDatagramRequest lwr;
+    lwr.command = kCommandLwr;
+    lwr.datagramIndex = datagramIndex_++;
+    lwr.adp = logicalLo;
+    lwr.ado = logicalHi;
+    lwr.payload = txProcessData;
+
+    if (!sendPrimaryOrSecondary(lwr, lwrWkc, lwrAck)) {
+        if (traceWkc) {
+            std::cerr << "[oec] " << commandName(lwr.command) << " failed: " << error_ << '\n';
         }
+        return false;
+    }
+    if (traceWkc) {
+        std::cerr << "[oec] " << commandName(lwr.command) << " wkc=" << lwrWkc << '\n';
     }
 
-    // Compatibility fallback: some chains behave better with split LWR + LRD.
-    if (error_.find("working counter too low") != std::string::npos) {
-        std::uint16_t lwrWkc = 0;
-        std::uint16_t lrdWkc = 0;
-        std::vector<std::uint8_t> lwrAck;
-        std::vector<std::uint8_t> lrdPayload;
+    EthercatDatagramRequest lrd;
+    lrd.command = kCommandLrd;
+    lrd.datagramIndex = datagramIndex_++;
+    lrd.adp = inputLogicalLo;
+    lrd.ado = inputLogicalHi;
+    lrd.payload.assign(rxProcessData.size(), 0U);
 
-        EthercatDatagramRequest lwr;
-        lwr.command = kCommandLwr;
-        lwr.datagramIndex = datagramIndex_++;
-        lwr.adp = logicalLo;
-        lwr.ado = logicalHi;
-        lwr.payload = txProcessData;
-
-        if (!sendPrimaryOrSecondary(lwr, lwrWkc, lwrAck)) {
-            return false;
+    if (!sendPrimaryOrSecondary(lrd, lrdWkc, lrdPayload)) {
+        if (traceWkc) {
+            std::cerr << "[oec] " << commandName(lrd.command) << " failed: " << error_ << '\n';
         }
-
-        EthercatDatagramRequest lrd;
-        lrd.command = kCommandLrd;
-        lrd.datagramIndex = datagramIndex_++;
-        lrd.adp = logicalLo;
-        lrd.ado = logicalHi;
-        lrd.payload.assign(rxProcessData.size(), 0U);
-
-        if (!sendPrimaryOrSecondary(lrd, lrdWkc, lrdPayload)) {
-            return false;
-        }
-
-        lastWorkingCounter_ = lrdWkc;
-        rxProcessData = std::move(lrdPayload);
-        error_.clear();
-        return true;
+        return false;
+    }
+    if (traceWkc) {
+        std::cerr << "[oec] " << commandName(lrd.command) << " wkc=" << lrdWkc << '\n';
     }
 
-    return false;
+    lastWorkingCounter_ = lrdWkc;
+    rxProcessData = std::move(lrdPayload);
+    error_.clear();
+    return true;
 }
 
 bool LinuxRawSocketTransport::requestNetworkState(SlaveState state) {
@@ -1178,8 +1194,8 @@ bool LinuxRawSocketTransport::configureProcessImage(const NetworkConfiguration& 
         }
     }
 
-    std::uint32_t outputLogical = 0U;
-    std::uint32_t inputLogical = 0U;
+    std::uint32_t outputLogical = logicalAddress_;
+    std::uint32_t inputLogical = logicalAddress_ + static_cast<std::uint32_t>(config.processImageOutputBytes);
     std::uint8_t fmmuIndex = 0U;
 
     for (const auto position : outputSlaves) {
