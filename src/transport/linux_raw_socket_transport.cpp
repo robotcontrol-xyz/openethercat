@@ -35,6 +35,8 @@ namespace {
 
 constexpr std::uint16_t kEtherTypeEthercat = 0x88A4;
 constexpr std::uint8_t kCommandLrw = 0x0C;
+constexpr std::uint8_t kCommandLrd = 0x0A;
+constexpr std::uint8_t kCommandLwr = 0x0B;
 constexpr std::uint8_t kCommandBrd = 0x07;
 constexpr std::uint8_t kCommandBwr = 0x08;
 constexpr std::uint8_t kCommandAprd = 0x01;
@@ -297,41 +299,84 @@ bool LinuxRawSocketTransport::exchange(const std::vector<std::uint8_t>& txProces
         return false;
     }
 
-    const auto currentIndex = datagramIndex_++;
-    EthercatLrwRequest request;
-    request.datagramIndex = currentIndex;
-    request.logicalAddress = logicalAddress_;
-    request.payload = txProcessData;
+    const auto logicalLo = static_cast<std::uint16_t>(logicalAddress_ & 0xFFFFU);
+    const auto logicalHi = static_cast<std::uint16_t>((logicalAddress_ >> 16U) & 0xFFFFU);
 
-    EthercatDatagramRequest datagram;
-    datagram.command = kCommandLrw;
-    datagram.datagramIndex = currentIndex;
-    datagram.adp = static_cast<std::uint16_t>(request.logicalAddress & 0xFFFFU);
-    datagram.ado = static_cast<std::uint16_t>((request.logicalAddress >> 16U) & 0xFFFFU);
-    datagram.payload = request.payload;
-
-    std::uint16_t wkc = 0;
-    std::vector<std::uint8_t> payload;
-    if (!sendAndReceiveDatagram(socketFd_, ifIndex_, timeoutMs_, maxFramesPerCycle_,
-                                expectedWorkingCounter_, destinationMac_, sourceMac_,
-                                datagram, wkc, payload, error_)) {
-        if (redundancyEnabled_ && secondarySocketFd_ >= 0) {
-            if (!sendAndReceiveDatagram(secondarySocketFd_, secondaryIfIndex_, timeoutMs_, maxFramesPerCycle_,
-                                        expectedWorkingCounter_, destinationMac_, sourceMac_,
-                                        datagram, wkc, payload, error_)) {
-                return false;
-            }
-            lastFrameUsedSecondary_ = true;
-        } else {
-            return false;
+    auto sendPrimaryOrSecondary = [&](const EthercatDatagramRequest& req,
+                                      std::uint16_t& outWkc,
+                                      std::vector<std::uint8_t>& outPayload) -> bool {
+        if (sendAndReceiveDatagram(socketFd_, ifIndex_, timeoutMs_, maxFramesPerCycle_,
+                                   expectedWorkingCounter_, destinationMac_, sourceMac_,
+                                   req, outWkc, outPayload, error_)) {
+            lastFrameUsedSecondary_ = false;
+            return true;
         }
-    } else {
-        lastFrameUsedSecondary_ = false;
+        if (redundancyEnabled_ && secondarySocketFd_ >= 0) {
+            if (sendAndReceiveDatagram(secondarySocketFd_, secondaryIfIndex_, timeoutMs_, maxFramesPerCycle_,
+                                       expectedWorkingCounter_, destinationMac_, sourceMac_,
+                                       req, outWkc, outPayload, error_)) {
+                lastFrameUsedSecondary_ = true;
+                return true;
+            }
+        }
+        return false;
+    };
+
+    // Fast path: single LRW frame for combined write/read process image.
+    {
+        const auto currentIndex = datagramIndex_++;
+        EthercatDatagramRequest lrw;
+        lrw.command = kCommandLrw;
+        lrw.datagramIndex = currentIndex;
+        lrw.adp = logicalLo;
+        lrw.ado = logicalHi;
+        lrw.payload = txProcessData;
+
+        std::uint16_t lrwWkc = 0;
+        std::vector<std::uint8_t> lrwPayload;
+        if (sendPrimaryOrSecondary(lrw, lrwWkc, lrwPayload)) {
+            lastWorkingCounter_ = lrwWkc;
+            rxProcessData = std::move(lrwPayload);
+            return true;
+        }
     }
 
-    lastWorkingCounter_ = wkc;
-    rxProcessData = payload;
-    return true;
+    // Compatibility fallback: some chains behave better with split LWR + LRD.
+    if (error_.find("working counter too low") != std::string::npos) {
+        std::uint16_t lwrWkc = 0;
+        std::uint16_t lrdWkc = 0;
+        std::vector<std::uint8_t> lwrAck;
+        std::vector<std::uint8_t> lrdPayload;
+
+        EthercatDatagramRequest lwr;
+        lwr.command = kCommandLwr;
+        lwr.datagramIndex = datagramIndex_++;
+        lwr.adp = logicalLo;
+        lwr.ado = logicalHi;
+        lwr.payload = txProcessData;
+
+        if (!sendPrimaryOrSecondary(lwr, lwrWkc, lwrAck)) {
+            return false;
+        }
+
+        EthercatDatagramRequest lrd;
+        lrd.command = kCommandLrd;
+        lrd.datagramIndex = datagramIndex_++;
+        lrd.adp = logicalLo;
+        lrd.ado = logicalHi;
+        lrd.payload.assign(rxProcessData.size(), 0U);
+
+        if (!sendPrimaryOrSecondary(lrd, lrdWkc, lrdPayload)) {
+            return false;
+        }
+
+        lastWorkingCounter_ = lrdWkc;
+        rxProcessData = std::move(lrdPayload);
+        error_.clear();
+        return true;
+    }
+
+    return false;
 }
 
 bool LinuxRawSocketTransport::requestNetworkState(SlaveState state) {
