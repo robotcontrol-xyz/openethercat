@@ -37,10 +37,10 @@ master.start();
 
 ```mermaid
 flowchart TD
-    Fault[Injected/Detected fault] --> Diagnostics[collectSlaveDiagnostics()]
+    Fault[Injected/Detected fault] --> Diagnostics[collectSlaveDiagnostics]
     Diagnostics --> Profile[Recovery override profile]
     Profile --> Action[Retry / Reconfigure / Failover]
-    Action --> History[recoveryEvents()]
+    Action --> History[recoveryEvents]
 ```
 
 Reference examples:
