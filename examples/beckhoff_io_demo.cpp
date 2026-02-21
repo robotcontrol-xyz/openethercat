@@ -89,13 +89,18 @@ int main(int argc, char** argv) {
             std::this_thread::sleep_for(150ms);
         }
     } else {
-        std::cout << "Running physical cycle mode for 10s; priming EL2004 output to trigger EL1004 callback.\n";
-        if (!master.setOutputByName("LampGreen", true)) {
-            std::cerr << "Failed to prime output: " << master.lastError() << '\n';
-            master.stop();
-            return 1;
-        }
+        std::cout << "Running physical cycle mode for 10s; toggling EL2004 output to trigger EL1004 callback.\n";
+        bool driveOutput = false;
         for (int cycle = 0; cycle < 2000; ++cycle) {
+            if ((cycle % 100) == 0) {
+                driveOutput = !driveOutput;
+                if (!master.setOutputByName("LampGreen", driveOutput)) {
+                    std::cerr << "Failed to toggle output: " << master.lastError() << '\n';
+                    master.stop();
+                    return 1;
+                }
+                std::cout << "Toggled LampGreen=" << (driveOutput ? "ON" : "OFF") << '\n';
+            }
             if (!master.runCycle()) {
                 std::cerr << "Cycle failed: " << master.lastError() << '\n';
                 master.stop();
