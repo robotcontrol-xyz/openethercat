@@ -118,6 +118,11 @@ bool decodeAlState(std::uint16_t rawState, SlaveState& out) {
     }
 }
 
+std::uint16_t toAutoIncrementAddress(std::uint16_t position) {
+    // EtherCAT auto-increment addresses are signed: 0, -1, -2, ...
+    return static_cast<std::uint16_t>(0U - position);
+}
+
 bool sendAndReceiveDatagram(
     int socketFd,
     int ifIndex,
@@ -399,7 +404,7 @@ bool LinuxRawSocketTransport::requestSlaveState(std::uint16_t position, SlaveSta
     EthercatDatagramRequest request;
     request.command = kCommandApwr;
     request.datagramIndex = currentIndex;
-    request.adp = position;
+    request.adp = toAutoIncrementAddress(position);
     request.ado = kRegisterAlControl;
     request.payload = {static_cast<std::uint8_t>(state), 0x00U};
 
@@ -424,7 +429,7 @@ bool LinuxRawSocketTransport::readSlaveState(std::uint16_t position, SlaveState&
     EthercatDatagramRequest request;
     request.command = kCommandAprd;
     request.datagramIndex = currentIndex;
-    request.adp = position;
+    request.adp = toAutoIncrementAddress(position);
     request.ado = kRegisterAlStatus;
     request.payload = {0x00U, 0x00U};
 
@@ -464,7 +469,7 @@ bool LinuxRawSocketTransport::readSlaveAlStatusCode(std::uint16_t position, std:
     EthercatDatagramRequest request;
     request.command = kCommandAprd;
     request.datagramIndex = currentIndex;
-    request.adp = position;
+    request.adp = toAutoIncrementAddress(position);
     request.ado = kRegisterAlStatusCode;
     request.payload = {0x00U, 0x00U};
 
@@ -508,6 +513,7 @@ bool LinuxRawSocketTransport::sdoUpload(std::uint16_t slavePosition, const SdoAd
         outError = "transport not open";
         return false;
     }
+    const auto adp = toAutoIncrementAddress(slavePosition);
 
     auto mailboxWrite = [&](const std::vector<std::uint8_t>& coePayload) -> bool {
         EscMailboxFrame frame;
@@ -527,7 +533,7 @@ bool LinuxRawSocketTransport::sdoUpload(std::uint16_t slavePosition, const SdoAd
         EthercatDatagramRequest req;
         req.command = kCommandApwr;
         req.datagramIndex = currentIndex;
-        req.adp = slavePosition;
+        req.adp = adp;
         req.ado = mailboxWriteOffset_;
         req.payload = bytes;
 
@@ -549,7 +555,7 @@ bool LinuxRawSocketTransport::sdoUpload(std::uint16_t slavePosition, const SdoAd
             EthercatDatagramRequest req;
             req.command = kCommandAprd;
             req.datagramIndex = currentIndex;
-            req.adp = slavePosition;
+            req.adp = adp;
             req.ado = mailboxReadOffset_;
             req.payload.assign(mailboxReadSize_, 0U);
 
@@ -632,6 +638,7 @@ bool LinuxRawSocketTransport::sdoDownload(std::uint16_t slavePosition, const Sdo
         outError = "transport not open";
         return false;
     }
+    const auto adp = toAutoIncrementAddress(slavePosition);
 
     auto mailboxWrite = [&](const std::vector<std::uint8_t>& coePayload) -> bool {
         EscMailboxFrame frame;
@@ -651,7 +658,7 @@ bool LinuxRawSocketTransport::sdoDownload(std::uint16_t slavePosition, const Sdo
         EthercatDatagramRequest req;
         req.command = kCommandApwr;
         req.datagramIndex = currentIndex;
-        req.adp = slavePosition;
+        req.adp = adp;
         req.ado = mailboxWriteOffset_;
         req.payload = bytes;
 
@@ -673,7 +680,7 @@ bool LinuxRawSocketTransport::sdoDownload(std::uint16_t slavePosition, const Sdo
             EthercatDatagramRequest req;
             req.command = kCommandAprd;
             req.datagramIndex = currentIndex;
-            req.adp = slavePosition;
+            req.adp = adp;
             req.ado = mailboxReadOffset_;
             req.payload.assign(mailboxReadSize_, 0U);
 
@@ -984,7 +991,7 @@ bool LinuxRawSocketTransport::discoverTopology(TopologySnapshot& outSnapshot, st
         SdoAddress productAddr;
         productAddr.index = 0x1018U;
         productAddr.subIndex = 0x02U;
-        const bool hasVendor = sdoUpload(adp, vendorAddr, objectData, abort, sdoError) && objectData.size() >= 4;
+        const bool hasVendor = sdoUpload(position, vendorAddr, objectData, abort, sdoError) && objectData.size() >= 4;
         if (hasVendor) {
             info.vendorId = static_cast<std::uint32_t>(objectData[0]) |
                             (static_cast<std::uint32_t>(objectData[1]) << 8U) |
@@ -994,7 +1001,7 @@ bool LinuxRawSocketTransport::discoverTopology(TopologySnapshot& outSnapshot, st
         objectData.clear();
         abort = 0U;
         sdoError.clear();
-        const bool hasProduct = sdoUpload(adp, productAddr, objectData, abort, sdoError) && objectData.size() >= 4;
+        const bool hasProduct = sdoUpload(position, productAddr, objectData, abort, sdoError) && objectData.size() >= 4;
         if (hasProduct) {
             info.productCode = static_cast<std::uint32_t>(objectData[0]) |
                                (static_cast<std::uint32_t>(objectData[1]) << 8U) |
