@@ -1112,6 +1112,7 @@ bool LinuxRawSocketTransport::configureProcessImage(const NetworkConfiguration& 
         outError = "transport not open";
         return false;
     }
+    const bool traceMap = (std::getenv("OEC_TRACE_MAP") != nullptr);
 
     const auto readSm = [&](std::uint16_t position, std::uint8_t smIndex,
                             std::uint16_t& outStart, std::uint16_t& outLen) -> bool {
@@ -1197,6 +1198,8 @@ bool LinuxRawSocketTransport::configureProcessImage(const NetworkConfiguration& 
     std::uint32_t outputLogical = logicalAddress_;
     std::uint32_t inputLogical = logicalAddress_ + static_cast<std::uint32_t>(config.processImageOutputBytes);
     std::uint8_t fmmuIndex = 0U;
+    std::size_t mappedOutputSlaves = 0U;
+    std::size_t mappedInputSlaves = 0U;
 
     for (const auto position : outputSlaves) {
         std::uint16_t smStart = 0U;
@@ -1204,13 +1207,25 @@ bool LinuxRawSocketTransport::configureProcessImage(const NetworkConfiguration& 
         if (!readSm(position, 2U, smStart, smLen)) {
             return false;
         }
+        if (traceMap) {
+            std::cerr << "[oec-map] slave=" << position
+                      << " SM2(start=0x" << std::hex << smStart
+                      << ", len=" << std::dec << smLen << ")\n";
+        }
         if (smLen == 0U) {
             continue;
         }
         if (!writeFmmu(position, fmmuIndex++, outputLogical, smLen, smStart, true)) {
             return false;
         }
+        if (traceMap) {
+            std::cerr << "[oec-map] slave=" << position
+                      << " FMMU(write, logical=0x" << std::hex << outputLogical
+                      << ", len=" << std::dec << smLen
+                      << ", physical=0x" << std::hex << smStart << ")\n";
+        }
         outputLogical += smLen;
+        ++mappedOutputSlaves;
     }
 
     for (const auto position : inputSlaves) {
@@ -1219,13 +1234,38 @@ bool LinuxRawSocketTransport::configureProcessImage(const NetworkConfiguration& 
         if (!readSm(position, 3U, smStart, smLen)) {
             return false;
         }
+        if (traceMap) {
+            std::cerr << "[oec-map] slave=" << position
+                      << " SM3(start=0x" << std::hex << smStart
+                      << ", len=" << std::dec << smLen << ")\n";
+        }
         if (smLen == 0U) {
             continue;
         }
         if (!writeFmmu(position, fmmuIndex++, inputLogical, smLen, smStart, false)) {
             return false;
         }
+        if (traceMap) {
+            std::cerr << "[oec-map] slave=" << position
+                      << " FMMU(read, logical=0x" << std::hex << inputLogical
+                      << ", len=" << std::dec << smLen
+                      << ", physical=0x" << std::hex << smStart << ")\n";
+        }
         inputLogical += smLen;
+        ++mappedInputSlaves;
+    }
+
+    if (!outputSlaves.empty() && mappedOutputSlaves == 0U) {
+        outError = "No output slaves produced valid SM2 mapping (all SM2 lengths were zero)";
+        return false;
+    }
+    if (!inputSlaves.empty() && mappedInputSlaves == 0U) {
+        outError = "No input slaves produced valid SM3 mapping (all SM3 lengths were zero)";
+        return false;
+    }
+    if (traceMap) {
+        std::cerr << "[oec-map] mapped outputs=" << mappedOutputSlaves
+                  << " mapped inputs=" << mappedInputSlaves << '\n';
     }
     return true;
 }
