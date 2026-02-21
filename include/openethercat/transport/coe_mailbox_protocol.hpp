@@ -1,3 +1,8 @@
+/**
+ * @file coe_mailbox_protocol.hpp
+ * @brief openEtherCAT source file.
+ */
+
 #pragma once
 
 #include <cstddef>

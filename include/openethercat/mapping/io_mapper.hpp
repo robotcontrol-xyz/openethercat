@@ -1,3 +1,8 @@
+/**
+ * @file io_mapper.hpp
+ * @brief openEtherCAT source file.
+ */
+
 #pragma once
 
 #include <functional>

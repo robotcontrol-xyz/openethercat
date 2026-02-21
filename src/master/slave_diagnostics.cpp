@@ -1,3 +1,8 @@
+/**
+ * @file slave_diagnostics.cpp
+ * @brief openEtherCAT source file.
+ */
+
 #include "openethercat/master/slave_diagnostics.hpp"
 
 #include <algorithm>

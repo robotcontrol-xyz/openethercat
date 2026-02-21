@@ -1,3 +1,8 @@
+/**
+ * @file distributed_clock.hpp
+ * @brief openEtherCAT source file.
+ */
+
 #pragma once
 
 #include <cstdint>

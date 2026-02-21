@@ -6,9 +6,9 @@ CREATE_SUBDIRS         = NO
 ALLOW_UNICODE_NAMES    = NO
 OUTPUT_LANGUAGE        = English
 
-INPUT                  = include docs README.md
+INPUT                  = include src examples tests docs README.md
 RECURSIVE              = YES
-FILE_PATTERNS          = *.hpp *.md
+FILE_PATTERNS          = *.hpp *.cpp *.md
 EXCLUDE_PATTERNS       = */build/*
 
 USE_MDFILE_AS_MAINPAGE = README.md

@@ -1,3 +1,8 @@
+/**
+ * @file cycle_controller.cpp
+ * @brief openEtherCAT source file.
+ */
+
 #include "openethercat/master/cycle_controller.hpp"
 
 #include <chrono>

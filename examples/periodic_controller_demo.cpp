@@ -1,3 +1,8 @@
+/**
+ * @file periodic_controller_demo.cpp
+ * @brief openEtherCAT source file.
+ */
+
 #include <chrono>
 #include <iostream>
 #include <thread>

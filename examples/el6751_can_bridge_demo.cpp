@@ -1,3 +1,8 @@
+/**
+ * @file el6751_can_bridge_demo.cpp
+ * @brief openEtherCAT source file.
+ */
+
 #include <array>
 #include <cstdint>
 #include <cstring>

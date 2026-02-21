@@ -1,3 +1,8 @@
+/**
+ * @file coe_mailbox_protocol_tests.cpp
+ * @brief openEtherCAT source file.
+ */
+
 #include <cassert>
 #include <cstdint>
 #include <iostream>

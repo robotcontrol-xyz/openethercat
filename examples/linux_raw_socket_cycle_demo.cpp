@@ -1,3 +1,8 @@
+/**
+ * @file linux_raw_socket_cycle_demo.cpp
+ * @brief openEtherCAT source file.
+ */
+
 #include <chrono>
 #include <iostream>
 #include <memory>

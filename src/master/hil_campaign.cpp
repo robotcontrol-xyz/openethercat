@@ -1,3 +1,8 @@
+/**
+ * @file hil_campaign.cpp
+ * @brief openEtherCAT source file.
+ */
+
 #include "openethercat/master/hil_campaign.hpp"
 
 namespace oec {

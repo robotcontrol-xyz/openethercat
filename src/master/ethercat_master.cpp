@@ -1,3 +1,8 @@
+/**
+ * @file ethercat_master.cpp
+ * @brief openEtherCAT source file.
+ */
+
 #include "openethercat/master/ethercat_master.hpp"
 
 #include <chrono>
@@ -13,6 +18,7 @@ EthercatMaster::EthercatMaster(ITransport& transport)
 
 bool EthercatMaster::configure(const NetworkConfiguration& config) {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
+    // Reset all runtime state so reconfiguration is deterministic and idempotent.
     mapper_ = IoMapper{};
     config_ = config;
     processImage_ = ProcessImage(config.processImageInputBytes, config.processImageOutputBytes);
@@ -23,6 +29,7 @@ bool EthercatMaster::configure(const NetworkConfiguration& config) {
     recoveryEvents_.clear();
     degraded_ = false;
 
+    // Validate before binding signals to avoid partially configured runtime state.
     const auto issues = ConfigurationValidator::validate(config);
     if (ConfigurationValidator::hasErrors(issues)) {
         std::ostringstream os;
@@ -37,6 +44,7 @@ bool EthercatMaster::configure(const NetworkConfiguration& config) {
         return false;
     }
 
+    // Pre-bind logical names so cycle-time lookups avoid repeated map construction.
     for (const auto& signal : config.signals) {
         if (!mapper_.bind(signal)) {
             setError("Duplicate logical signal name: " + signal.logicalName);
@@ -60,6 +68,7 @@ bool EthercatMaster::start() {
         return false;
     }
 
+    // Optionally drive a full AL startup ladder so cyclic exchange starts from OP.
     if (stateMachineOptions_.enable) {
         if (!transitionNetworkTo(SlaveState::Init) ||
             !transitionNetworkTo(SlaveState::PreOp) ||
@@ -94,10 +103,12 @@ bool EthercatMaster::runCycle() {
 
     try {
         const auto begin = std::chrono::steady_clock::now();
+        // Start from a copy of current input image; transport fills it in-place.
         auto rx = processImage_.inputBytes();
         if (!transport_.exchange(processImage_.outputBytes(), rx)) {
             setError("Transport exchange failed: " + transport_.lastError());
             if (recoveryOptions_.enable) {
+                // Recovery is best-effort and can append contextual error details.
                 const bool recovered = recoverNetwork();
                 if (!recovered) {
                     setError(error_ + " | recovery failed");
@@ -109,6 +120,7 @@ bool EthercatMaster::runCycle() {
         }
         processImage_.inputBytes() = rx;
         statistics_.lastWorkingCounter = transport_.lastWorkingCounter();
+        // Dispatch callbacks only after a consistent full-image update.
         mapper_.dispatchInputChanges(processImage_);
         const auto end = std::chrono::steady_clock::now();
         statistics_.lastCycleRuntime =
@@ -222,6 +234,7 @@ std::vector<SlaveDiagnostic> EthercatMaster::collectSlaveDiagnostics() {
 
         SlaveState state = SlaveState::Init;
         std::uint16_t alStatusCode = 0U;
+        // Read both state and AL status code to classify recoverability.
         const bool hasState = transport_.readSlaveState(slave.position, state);
         const bool hasAlStatus = transport_.readSlaveAlStatusCode(slave.position, alStatusCode);
         diagnostic.available = hasState && hasAlStatus;
@@ -229,6 +242,7 @@ std::vector<SlaveDiagnostic> EthercatMaster::collectSlaveDiagnostics() {
             diagnostic.state = state;
             diagnostic.alStatusCode = alStatusCode;
             diagnostic.alStatus = AlStatusDecoder::decode(alStatusCode);
+            // Override table allows deterministic policy behavior per AL status code.
             const auto overrideIt = recoveryActionOverrides_.find(alStatusCode);
             if (overrideIt != recoveryActionOverrides_.end()) {
                 diagnostic.suggestedAction = overrideIt->second;
@@ -260,6 +274,7 @@ bool EthercatMaster::recoverNetwork() {
         return false;
     }
 
+    // Continue across all diagnostics so one failing slave does not block others.
     bool recoveredAny = false;
     for (const auto& diagnostic : diagnostics) {
         if (diagnostic.suggestedAction == RecoveryAction::None) {

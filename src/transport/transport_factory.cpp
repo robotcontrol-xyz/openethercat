@@ -1,3 +1,8 @@
+/**
+ * @file transport_factory.cpp
+ * @brief openEtherCAT source file.
+ */
+
 #include "openethercat/transport/transport_factory.hpp"
 
 #include <algorithm>

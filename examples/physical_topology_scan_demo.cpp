@@ -1,3 +1,8 @@
+/**
+ * @file physical_topology_scan_demo.cpp
+ * @brief openEtherCAT source file.
+ */
+
 #include <iomanip>
 #include <iostream>
 #include <string>

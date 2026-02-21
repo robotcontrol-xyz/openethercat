@@ -1,3 +1,8 @@
+/**
+ * @file process_image.hpp
+ * @brief openEtherCAT source file.
+ */
+
 #pragma once
 
 #include <cstddef>

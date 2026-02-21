@@ -1,3 +1,8 @@
+/**
+ * @file ethercat_frame.cpp
+ * @brief openEtherCAT source file.
+ */
+
 #include "openethercat/transport/ethercat_frame.hpp"
 
 namespace oec {

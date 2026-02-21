@@ -1,3 +1,8 @@
+/**
+ * @file ethercat_frame.hpp
+ * @brief openEtherCAT source file.
+ */
+
 #pragma once
 
 #include <cstdint>

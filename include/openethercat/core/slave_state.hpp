@@ -1,3 +1,8 @@
+/**
+ * @file slave_state.hpp
+ * @brief openEtherCAT source file.
+ */
+
 #pragma once
 
 #include <cstdint>

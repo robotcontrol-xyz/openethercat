@@ -1,3 +1,8 @@
+/**
+ * @file linux_raw_socket_transport.cpp
+ * @brief openEtherCAT source file.
+ */
+
 #include "openethercat/transport/linux_raw_socket_transport.hpp"
 
 #include <algorithm>

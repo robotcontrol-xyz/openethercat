@@ -1,3 +1,8 @@
+/**
+ * @file protocol_and_loader_tests.cpp
+ * @brief openEtherCAT source file.
+ */
+
 #include <cassert>
 #include <cstdint>
 #include <filesystem>

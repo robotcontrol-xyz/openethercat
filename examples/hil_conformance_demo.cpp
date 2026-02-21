@@ -1,3 +1,8 @@
+/**
+ * @file hil_conformance_demo.cpp
+ * @brief openEtherCAT source file.
+ */
+
 #include <algorithm>
 #include <chrono>
 #include <iostream>

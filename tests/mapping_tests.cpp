@@ -1,3 +1,8 @@
+/**
+ * @file mapping_tests.cpp
+ * @brief openEtherCAT source file.
+ */
+
 #include <cassert>
 #include <iostream>
 

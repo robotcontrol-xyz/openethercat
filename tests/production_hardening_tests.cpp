@@ -1,3 +1,8 @@
+/**
+ * @file production_hardening_tests.cpp
+ * @brief openEtherCAT source file.
+ */
+
 #include <atomic>
 #include <cassert>
 #include <chrono>

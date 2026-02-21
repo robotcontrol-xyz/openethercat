@@ -1,3 +1,8 @@
+/**
+ * @file transport_factory.hpp
+ * @brief openEtherCAT source file.
+ */
+
 #pragma once
 
 #include <cstddef>

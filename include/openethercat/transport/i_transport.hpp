@@ -1,3 +1,8 @@
+/**
+ * @file i_transport.hpp
+ * @brief openEtherCAT source file.
+ */
+
 #pragma once
 
 #include <cstdint>

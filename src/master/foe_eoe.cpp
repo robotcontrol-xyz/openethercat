@@ -1,3 +1,8 @@
+/**
+ * @file foe_eoe.cpp
+ * @brief openEtherCAT source file.
+ */
+
 #include "openethercat/master/foe_eoe.hpp"
 
 namespace oec {

@@ -1,3 +1,8 @@
+/**
+ * @file cycle_controller.hpp
+ * @brief openEtherCAT source file.
+ */
+
 #pragma once
 
 #include <atomic>

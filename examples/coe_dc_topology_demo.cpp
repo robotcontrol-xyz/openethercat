@@ -1,3 +1,8 @@
+/**
+ * @file coe_dc_topology_demo.cpp
+ * @brief openEtherCAT source file.
+ */
+
 #include <chrono>
 #include <iostream>
 #include <memory>

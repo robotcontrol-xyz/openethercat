@@ -1,3 +1,8 @@
+/**
+ * @file el6692_structured_bridge_demo.cpp
+ * @brief openEtherCAT source file.
+ */
+
 #include <array>
 #include <algorithm>
 #include <cstdint>

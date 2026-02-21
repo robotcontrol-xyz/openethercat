@@ -1,3 +1,8 @@
+/**
+ * @file recovery_diagnostics_demo.cpp
+ * @brief openEtherCAT source file.
+ */
+
 #include <iostream>
 
 #include "openethercat/config/config_loader.hpp"

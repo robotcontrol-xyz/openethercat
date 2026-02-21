@@ -1,3 +1,8 @@
+/**
+ * @file beckhoff_io_demo.cpp
+ * @brief openEtherCAT source file.
+ */
+
 #include <chrono>
 #include <iostream>
 #include <memory>

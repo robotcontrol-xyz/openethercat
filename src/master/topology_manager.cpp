@@ -1,3 +1,8 @@
+/**
+ * @file topology_manager.cpp
+ * @brief openEtherCAT source file.
+ */
+
 #include "openethercat/master/topology_manager.hpp"
 
 #include <unordered_set>

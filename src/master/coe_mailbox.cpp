@@ -1,3 +1,8 @@
+/**
+ * @file coe_mailbox.cpp
+ * @brief openEtherCAT source file.
+ */
+
 #include "openethercat/master/coe_mailbox.hpp"
 
 #include <sstream>
@@ -11,6 +16,7 @@ SdoResponse CoeMailboxService::upload(std::uint16_t slavePosition, SdoAddress ad
     std::vector<std::uint8_t> data;
     std::uint32_t abortCode = 0;
     std::string error;
+    // Transport returns either protocol-level abort code or a transport error string.
     const bool ok = transport_.sdoUpload(slavePosition, address, data, abortCode, error);
     response.success = ok;
     response.data = std::move(data);
@@ -30,6 +36,7 @@ SdoResponse CoeMailboxService::download(std::uint16_t slavePosition,
     SdoResponse response;
     std::uint32_t abortCode = 0;
     std::string error;
+    // Keep abort decoding in one place so callers always get consistent failure semantics.
     const bool ok = transport_.sdoDownload(slavePosition, address, data, abortCode, error);
     response.success = ok;
     if (!ok) {
@@ -61,6 +68,7 @@ std::vector<EmergencyMessage> CoeMailboxService::drainEmergencyQueue(std::size_t
     messages.reserve(maxMessages);
     for (std::size_t i = 0; i < maxMessages; ++i) {
         EmergencyMessage emergency;
+        // Poll until queue is empty or caller-imposed limit is reached.
         if (!transport_.pollEmergency(emergency)) {
             break;
         }

@@ -1,3 +1,8 @@
+/**
+ * @file config_loader.cpp
+ * @brief openEtherCAT source file.
+ */
+
 #include "openethercat/config/config_loader.hpp"
 
 #include <algorithm>

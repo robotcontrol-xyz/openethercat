@@ -1,3 +1,8 @@
+/**
+ * @file distributed_clock.cpp
+ * @brief openEtherCAT source file.
+ */
+
 #include "openethercat/master/distributed_clock.hpp"
 
 #include <algorithm>

@@ -1,3 +1,8 @@
+/**
+ * @file coe_mailbox_protocol.cpp
+ * @brief openEtherCAT source file.
+ */
+
 #include "openethercat/transport/coe_mailbox_protocol.hpp"
 
 #include <algorithm>

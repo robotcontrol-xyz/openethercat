@@ -1,3 +1,8 @@
+/**
+ * @file cycle_statistics.hpp
+ * @brief openEtherCAT source file.
+ */
+
 #pragma once
 
 #include <chrono>

@@ -1,3 +1,8 @@
+/**
+ * @file eni_esi_models.cpp
+ * @brief openEtherCAT source file.
+ */
+
 #include "openethercat/config/eni_esi_models.hpp"
 
 #include <regex>

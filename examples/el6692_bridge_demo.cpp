@@ -1,3 +1,8 @@
+/**
+ * @file el6692_bridge_demo.cpp
+ * @brief openEtherCAT source file.
+ */
+
 #include <cstdint>
 #include <cstring>
 #include <iostream>

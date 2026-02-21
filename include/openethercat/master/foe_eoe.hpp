@@ -1,3 +1,8 @@
+/**
+ * @file foe_eoe.hpp
+ * @brief openEtherCAT source file.
+ */
+
 #pragma once
 
 #include <cstdint>

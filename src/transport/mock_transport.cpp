@@ -1,3 +1,8 @@
+/**
+ * @file mock_transport.cpp
+ * @brief openEtherCAT source file.
+ */
+
 #include "openethercat/transport/mock_transport.hpp"
 
 #include <algorithm>

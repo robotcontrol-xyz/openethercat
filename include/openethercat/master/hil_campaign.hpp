@@ -1,3 +1,8 @@
+/**
+ * @file hil_campaign.hpp
+ * @brief openEtherCAT source file.
+ */
+
 #pragma once
 
 #include <cstdint>

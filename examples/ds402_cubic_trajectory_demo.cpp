@@ -1,3 +1,8 @@
+/**
+ * @file ds402_cubic_trajectory_demo.cpp
+ * @brief openEtherCAT source file.
+ */
+
 #include <chrono>
 #include <cmath>
 #include <cstdint>

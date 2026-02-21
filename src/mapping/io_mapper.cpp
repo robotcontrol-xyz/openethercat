@@ -1,3 +1,8 @@
+/**
+ * @file io_mapper.cpp
+ * @brief openEtherCAT source file.
+ */
+
 #include "openethercat/mapping/io_mapper.hpp"
 
 namespace oec {

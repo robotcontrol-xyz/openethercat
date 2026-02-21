@@ -1,3 +1,8 @@
+/**
+ * @file ethercat_master.hpp
+ * @brief openEtherCAT source file.
+ */
+
 #pragma once
 
 #include <mutex>
@@ -32,11 +37,17 @@ namespace oec {
  */
 class EthercatMaster {
 public:
+    /**
+     * @brief Startup state-machine behavior for INIT->PRE-OP->SAFE-OP->OP transitions.
+     */
     struct StateMachineOptions {
         bool enable = true;
         std::chrono::milliseconds transitionTimeout{500};
         std::size_t pollIntervalMs = 5;
     };
+    /**
+     * @brief Recovery policy knobs used when cyclic exchange fails.
+     */
     struct RecoveryOptions {
         bool enable = true;
         std::size_t maxRetriesPerSlave = 3;
@@ -44,6 +55,9 @@ public:
         bool stopMasterOnFailover = false;
         std::size_t maxEventHistory = 1024;
     };
+    /**
+     * @brief Immutable record for one recovery action attempt.
+     */
     struct RecoveryEvent {
         std::chrono::system_clock::time_point timestamp{};
         std::uint64_t cycleIndex = 0;
@@ -87,17 +101,41 @@ public:
                         std::vector<std::uint8_t>& outData) const;
 
     bool onInputChange(const std::string& logicalName, IoMapper::InputCallback callback);
+    /**
+     * @brief Replace state-machine transition options.
+     */
     void setStateMachineOptions(StateMachineOptions options);
+    /**
+     * @brief Replace recovery policy options.
+     */
     void setRecoveryOptions(RecoveryOptions options);
+    /**
+     * @brief Force a recovery action for a specific AL status code.
+     */
     void setRecoveryActionOverride(std::uint16_t alStatusCode, RecoveryAction action);
+    /**
+     * @brief Clear all status-code specific recovery overrides.
+     */
     void clearRecoveryActionOverrides();
 
+    /**
+     * @brief Read diagnostic snapshot for all configured slaves.
+     */
     std::vector<SlaveDiagnostic> collectSlaveDiagnostics();
+    /**
+     * @brief Attempt recovery actions for currently diagnosed failures.
+     */
     bool recoverNetwork();
     std::vector<RecoveryEvent> recoveryEvents() const;
     void clearRecoveryEvents();
     bool isDegraded() const;
+    /**
+     * @brief CoE SDO upload convenience wrapper.
+     */
     SdoResponse sdoUpload(std::uint16_t slavePosition, SdoAddress address);
+    /**
+     * @brief CoE SDO download convenience wrapper.
+     */
     SdoResponse sdoDownload(std::uint16_t slavePosition, SdoAddress address,
                             const std::vector<std::uint8_t>& data);
     bool configureRxPdo(std::uint16_t slavePosition, const std::vector<PdoMappingEntry>& entries,
@@ -105,6 +143,9 @@ public:
     bool configureTxPdo(std::uint16_t slavePosition, const std::vector<PdoMappingEntry>& entries,
                         std::string& outError);
     std::vector<EmergencyMessage> drainEmergencies(std::size_t maxMessages);
+    /**
+     * @brief FoE read convenience wrapper.
+     */
     FoEResponse foeReadFile(std::uint16_t slavePosition, const FoERequest& request);
     bool foeWriteFile(std::uint16_t slavePosition, const FoERequest& request,
                       const std::vector<std::uint8_t>& data, std::string& outError);
@@ -117,6 +158,9 @@ public:
                                                        std::int64_t localTimeNs);
     DcSyncStats distributedClockStats() const;
 
+    /**
+     * @brief Refresh live topology snapshot from transport discovery.
+     */
     bool refreshTopology(std::string& outError);
     TopologySnapshot topologySnapshot() const;
     std::vector<SlaveIdentity> hotConnectedSlaves() const;

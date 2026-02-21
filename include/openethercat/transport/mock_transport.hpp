@@ -1,3 +1,8 @@
+/**
+ * @file mock_transport.hpp
+ * @brief openEtherCAT source file.
+ */
+
 #pragma once
 
 #include <cstddef>

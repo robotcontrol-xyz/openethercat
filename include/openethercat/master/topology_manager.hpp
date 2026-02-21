@@ -1,3 +1,8 @@
+/**
+ * @file topology_manager.hpp
+ * @brief openEtherCAT source file.
+ */
+
 #pragma once
 
 #include <cstdint>

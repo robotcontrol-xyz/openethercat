@@ -1,3 +1,8 @@
+/**
+ * @file recovery_profile_loader.cpp
+ * @brief openEtherCAT source file.
+ */
+
 #include "openethercat/config/recovery_profile_loader.hpp"
 
 #include <fstream>

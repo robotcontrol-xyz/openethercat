@@ -1,3 +1,8 @@
+/**
+ * @file coe_mailbox.hpp
+ * @brief openEtherCAT source file.
+ */
+
 #pragma once
 
 #include <array>
@@ -60,19 +65,37 @@ struct EmergencyMessage {
  */
 class CoeMailboxService {
 public:
+    /**
+     * @brief Construct CoE service facade bound to transport mailbox hooks.
+     */
     explicit CoeMailboxService(ITransport& transport);
 
+    /**
+     * @brief Perform SDO upload (read) from a slave object entry.
+     */
     SdoResponse upload(std::uint16_t slavePosition, SdoAddress address) const;
+    /**
+     * @brief Perform SDO download (write) to a slave object entry.
+     */
     SdoResponse download(std::uint16_t slavePosition,
                          SdoAddress address,
                          const std::vector<std::uint8_t>& data) const;
+    /**
+     * @brief Configure standard RxPDO mapping for a slave.
+     */
     bool configureRxPdo(std::uint16_t slavePosition,
                         const std::vector<PdoMappingEntry>& entries,
                         std::string& outError) const;
+    /**
+     * @brief Configure standard TxPDO mapping for a slave.
+     */
     bool configureTxPdo(std::uint16_t slavePosition,
                         const std::vector<PdoMappingEntry>& entries,
                         std::string& outError) const;
 
+    /**
+     * @brief Drain up to `maxMessages` emergency messages from transport queue.
+     */
     std::vector<EmergencyMessage> drainEmergencyQueue(std::size_t maxMessages) const;
 
 private:

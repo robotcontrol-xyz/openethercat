@@ -1,3 +1,8 @@
+/**
+ * @file recovery_profile_loader.hpp
+ * @brief openEtherCAT source file.
+ */
+
 #pragma once
 
 #include <cstdint>

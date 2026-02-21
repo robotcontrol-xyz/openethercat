@@ -1,3 +1,8 @@
+/**
+ * @file linux_raw_socket_transport.hpp
+ * @brief openEtherCAT source file.
+ */
+
 #pragma once
 
 #include <array>

@@ -1,3 +1,8 @@
+/**
+ * @file mock_hil_soak.cpp
+ * @brief openEtherCAT source file.
+ */
+
 #include <chrono>
 #include <iostream>
 

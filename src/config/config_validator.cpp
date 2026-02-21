@@ -1,3 +1,8 @@
+/**
+ * @file config_validator.cpp
+ * @brief openEtherCAT source file.
+ */
+
 #include "openethercat/config/config_validator.hpp"
 
 #include <sstream>
