@@ -23,6 +23,9 @@ Startup mapping notes for Linux transport:
 - `LinuxRawSocketTransport::configureProcessImage(...)` reads SM2/SM3 from each configured I/O slave.
 - Transport programs FMMU windows for output (SM2/write) and input (SM3/read) paths.
 - Then startup continues to SAFE-OP and OP.
+- For field troubleshooting, set `OEC_TRACE_MAP=1` to print SM/FMMU startup mapping.
+- For field troubleshooting, set `OEC_TRACE_WKC=1` to print cyclic WKC per datagram.
+- For field troubleshooting, set `OEC_TRACE_OUTPUT_VERIFY=1` to read back SM2 RAM and compare commanded output bytes.
 
 ```mermaid
 sequenceDiagram

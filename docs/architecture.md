@@ -47,7 +47,7 @@ flowchart TB
 ### `oec::LinuxRawSocketTransport`
 - Role: real Linux EtherCAT transport over raw sockets.
 - Responsibilities:
-- Build/parse EtherCAT datagrams and issue cyclic LRW exchanges.
+- Build/parse EtherCAT datagrams and issue cyclic `LWR` (outputs) + `LRD` (inputs) exchanges.
 - Read/write AL state and AL status code registers.
 - Discover topology (`discoverTopology(...)`) and report redundancy link health.
 - Execute CoE mailbox SDO upload/download paths implemented in transport layer.
@@ -193,8 +193,10 @@ sequenceDiagram
     APP->>M: set outputs / writeOutputBytes
     APP->>M: runCycle()
     M->>T: exchange(txProcessImage)
-    T->>S: LRW frame
-    S-->>T: LRW response + WKC
+    T->>S: LWR (outputs)
+    S-->>T: LWR response + WKC
+    T->>S: LRD (inputs)
+    S-->>T: LRD response + WKC
     T-->>M: rxProcessImage
     M->>M: update process image + callbacks
     M-->>APP: cycle result + diagnostics
@@ -207,6 +209,7 @@ Current Linux startup mapping is hybrid:
 - Sync manager base/length (`SM2` for outputs, `SM3` for inputs) is read from each slave ESC at startup.
 - FMMU entries are programmed from those SM windows to the master's logical process image.
 - Full dynamic PDO descriptor discovery (`0x1C12/0x1C13`, `0x16xx/0x1Axx`) is not yet auto-derived.
+- Optional runtime write-verification can read back SM2 process RAM and compare against commanded outputs (`OEC_TRACE_OUTPUT_VERIFY=1`).
 
 ```mermaid
 flowchart LR

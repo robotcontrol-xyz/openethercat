@@ -310,6 +310,7 @@ void LinuxRawSocketTransport::close() {
     secondaryIfIndex_ = 0;
     lastWorkingCounter_ = 0;
     lastFrameUsedSecondary_ = false;
+    outputWindows_.clear();
 }
 
 bool LinuxRawSocketTransport::exchange(const std::vector<std::uint8_t>& txProcessData,
@@ -388,6 +389,75 @@ bool LinuxRawSocketTransport::exchange(const std::vector<std::uint8_t>& txProces
     }
     if (traceWkc) {
         std::cerr << "[oec] " << commandName(lrd.command) << " wkc=" << lrdWkc << '\n';
+    }
+
+    // Optional field-debug path: confirm written outputs by reading mapped SM2 process RAM.
+    const bool traceOutputVerify = (std::getenv("OEC_TRACE_OUTPUT_VERIFY") != nullptr);
+    if (traceOutputVerify && !outputWindows_.empty()) {
+        for (const auto& window : outputWindows_) {
+            const std::uint32_t relLogical = window.logicalStart - logicalAddress_;
+            if (relLogical >= txProcessData.size()) {
+                continue;
+            }
+            const std::size_t available = txProcessData.size() - static_cast<std::size_t>(relLogical);
+            const std::size_t readLen = std::min<std::size_t>(window.length, available);
+            if (readLen == 0U) {
+                continue;
+            }
+
+            EthercatDatagramRequest verify;
+            verify.command = kCommandAprd;
+            verify.datagramIndex = datagramIndex_++;
+            verify.adp = toAutoIncrementAddress(window.slavePosition);
+            verify.ado = window.physicalStart;
+            verify.payload.assign(readLen, 0U);
+
+            std::uint16_t verifyWkc = 0;
+            std::vector<std::uint8_t> physicalBytes;
+            std::string verifyError;
+            if (!sendAndReceiveDatagram(socketFd_, ifIndex_, timeoutMs_, maxFramesPerCycle_,
+                                        expectedWorkingCounter_, destinationMac_, sourceMac_,
+                                        verify, verifyWkc, physicalBytes, verifyError)) {
+                std::cerr << "[oec-verify] slave=" << window.slavePosition
+                          << " APRD@0x" << std::hex << window.physicalStart << std::dec
+                          << " failed: " << verifyError << '\n';
+                continue;
+            }
+
+            bool mismatch = false;
+            for (std::size_t i = 0; i < readLen; ++i) {
+                const auto expected = txProcessData[static_cast<std::size_t>(relLogical) + i];
+                if (physicalBytes[i] != expected) {
+                    mismatch = true;
+                    break;
+                }
+            }
+
+            if (mismatch) {
+                std::cerr << "[oec-verify] slave=" << window.slavePosition
+                          << " wkc=" << verifyWkc
+                          << " logical=0x" << std::hex << window.logicalStart
+                          << " physical=0x" << window.physicalStart
+                          << " len=" << std::dec << readLen
+                          << " mismatch expected:";
+                for (std::size_t i = 0; i < readLen; ++i) {
+                    const auto byte = txProcessData[static_cast<std::size_t>(relLogical) + i];
+                    std::cerr << " " << std::hex << static_cast<int>(byte);
+                }
+                std::cerr << " actual:";
+                for (std::size_t i = 0; i < readLen; ++i) {
+                    std::cerr << " " << std::hex << static_cast<int>(physicalBytes[i]);
+                }
+                std::cerr << std::dec << '\n';
+            } else {
+                std::cerr << "[oec-verify] slave=" << window.slavePosition
+                          << " wkc=" << verifyWkc
+                          << " logical=0x" << std::hex << window.logicalStart
+                          << " physical=0x" << window.physicalStart
+                          << " len=" << std::dec << readLen
+                          << " output image matches\n";
+            }
+        }
     }
 
     lastWorkingCounter_ = lrdWkc;
@@ -1196,6 +1266,7 @@ bool LinuxRawSocketTransport::configureProcessImage(const NetworkConfiguration& 
         return false;
     }
     const bool traceMap = (std::getenv("OEC_TRACE_MAP") != nullptr);
+    outputWindows_.clear();
 
     const auto readSm = [&](std::uint16_t position, std::uint8_t smIndex,
                             std::uint16_t& outStart, std::uint16_t& outLen) -> bool {
@@ -1402,6 +1473,9 @@ bool LinuxRawSocketTransport::configureProcessImage(const NetworkConfiguration& 
                       << ", len=" << std::dec << smLen
                       << ", physical=0x" << std::hex << smStart << ")\n";
         }
+        outputWindows_.push_back(ProcessDataWindow{
+            position, smStart, smLen, outputLogical
+        });
         outputLogical += smLen;
         ++mappedOutputSlaves;
     }

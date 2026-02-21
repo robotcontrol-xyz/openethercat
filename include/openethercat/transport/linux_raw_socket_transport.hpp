@@ -65,6 +65,13 @@ public:
     std::uint16_t lastWorkingCounter() const override;
 
 private:
+    struct ProcessDataWindow {
+        std::uint16_t slavePosition = 0U;
+        std::uint16_t physicalStart = 0U;
+        std::uint16_t length = 0U;
+        std::uint32_t logicalStart = 0U;
+    };
+
     std::string ifname_;
     std::string secondaryIfname_;
     int socketFd_ = -1;
@@ -87,6 +94,7 @@ private:
     std::uint8_t mailboxCounter_ = 0;
     int timeoutMs_ = 10;
     std::string error_;
+    std::vector<ProcessDataWindow> outputWindows_;
 };
 
 } // namespace oec

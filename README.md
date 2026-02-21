@@ -6,7 +6,7 @@ A clean C++17 EtherCAT master stack foundation for Linux, designed for extensibi
 
 This repository provides:
 - A C++17 library (`openethercat`) with SOLID-oriented interfaces.
-- Linux raw-socket transport with EtherCAT LRW frame build/parse and WKC validation.
+- Linux raw-socket transport with EtherCAT datagram build/parse, cyclic `LWR`/`LRD`, and WKC validation.
 - AL state transition primitives (broadcast write/read) for INIT/PRE-OP/SAFE-OP/OP startup sequencing.
 - Per-slave diagnostic hooks for AL state + AL status-code reads.
 - A mock transport to run examples and tests without EtherCAT hardware.
@@ -100,6 +100,13 @@ sudo ./build/coe_dc_topology_demo linux:eth0
 sudo ./build/physical_topology_scan_demo linux:eth0
 ```
 
+Physical I/O troubleshooting (mapping + WKC + output RAM readback):
+
+```bash
+sudo OEC_TRACE_MAP=1 OEC_TRACE_WKC=1 OEC_TRACE_OUTPUT_VERIFY=1 \
+  ./build/beckhoff_io_demo linux:eth0
+```
+
 ## Architecture summary
 
 - `transport`: `ITransport` abstraction with Linux raw socket and mock implementations.
@@ -120,6 +127,8 @@ sudo ./build/physical_topology_scan_demo linux:eth0
 - `docs/architecture.md`: layered architecture and runtime/recovery sequence diagrams.
 - `docs/use-cases.md`: common deployment/application patterns and data flow diagrams.
 - `docs/ds402-cubic-trajectory.md`: DS402 CSP motion example design and sequence.
+- `docs/ethercat-primer.md`: EtherCAT fundamentals, acronym glossary, and trace interpretation guide.
+  Includes process-image structure diagrams and EL1004/EL2004 byte/bit mapping examples.
 
 ## Extension points
 
