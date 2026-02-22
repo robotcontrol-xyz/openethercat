@@ -58,12 +58,14 @@ flowchart TB
 Internal decomposition strategy (Linux-only):
 - Facade class remains `LinuxRawSocketTransport`.
 - Linux-scoped implementation files split by responsibility:
-- `linux_raw_socket_transport.cpp` (core transport + AL/DC/state facade methods),
+- `linux_raw_socket_transport.cpp` (facade plumbing + cycle-path orchestration),
+- `linux_raw_socket_transport_core_io.cpp` (socket lifecycle + datagram TX/RX wrapper),
+- `linux_raw_socket_transport_state_dc.cpp` (AL-state + DC register paths),
 - `linux_raw_socket_transport_mailbox.cpp` (mailbox engine/policy),
 - `linux_raw_socket_transport_foe_eoe.cpp` (FoE/EoE flows),
 - `linux_raw_socket_transport_topology.cpp` (topology discovery + redundancy health),
 - `linux_raw_socket_transport_process_image.cpp` (SM/FMMU process-image mapping).
-- See `roadmap/linux-transport-refactor-strategy.md` for guardrails and extraction roadmap.
+- See `roadmap/linux-transport-refactor-strategy.md` for guardrails and cohesion checks.
 
 ### `oec::MockTransport`
 - Role: deterministic non-hardware transport for tests and demos.

@@ -7,8 +7,8 @@ This roadmap tracks production-hardening work for the C++17 Linux-focused EtherC
 ## Current phase snapshot
 
 - Phase 1: Core stack foundation and architecture: largely complete.
-- Phase 2: Mailbox robustness and diagnostics: in strong progress.
-- Phase 3: Linux transport modularization/refactor for maintainability: in strong progress.
+- Phase 2: Mailbox robustness and diagnostics: in progress (software path mature; physical KPI evidence still expanding).
+- Phase 3: Linux transport modularization/refactor for maintainability: software-complete with boundary guards.
 - Remaining production gaps: long-run HIL conformance, broader interoperability matrix, deep DC hardware coupling.
 
 ## Completed highlights
@@ -20,6 +20,8 @@ This roadmap tracks production-hardening work for the C++17 Linux-focused EtherC
 - Extensive docs and examples including Beckhoff I/O and DS402 demo paths.
 - Transport refactor into Linux-scoped modules:
   - `linux_raw_socket_transport.cpp`
+  - `linux_raw_socket_transport_core_io.cpp`
+  - `linux_raw_socket_transport_state_dc.cpp`
   - `linux_raw_socket_transport_mailbox.cpp`
   - `linux_raw_socket_transport_foe_eoe.cpp`
   - `linux_raw_socket_transport_topology.cpp`
@@ -27,11 +29,11 @@ This roadmap tracks production-hardening work for the C++17 Linux-focused EtherC
 
 ## Active workstream
 
-### Linux transport architecture hardening
+### Physical HIL validation and KPI evidence
 
-- Keep `LinuxRawSocketTransport` as facade.
-- Keep internal responsibilities split by Linux-specific module.
-- Preserve diagnostics semantics and public API stability.
+- Run tiered matrix campaigns on physical benches.
+- Collect repeatable KPI evidence and trend stability reports.
+- Close phase acceptance with archived artifacts and pass/fail records.
 
 ## Next steps (ordered)
 
@@ -44,5 +46,6 @@ This roadmap tracks production-hardening work for the C++17 Linux-focused EtherC
   - `openethercat`
   - `advanced_systems_tests`
   - `coe_mailbox_protocol_tests`
+  - `transport_module_boundary_tests`
 - Tests must pass before commit.
 - No public API break unless explicitly planned.

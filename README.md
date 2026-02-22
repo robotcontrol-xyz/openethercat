@@ -19,10 +19,12 @@ This repository provides:
 - Persistent bounded recovery event history and degraded-mode state tracking.
 - CoE mailbox foundation: SDO upload/download service API, PDO mapping API, emergency queue API.
 - Linux transport CoE segmented SDO upload/download implementation over configurable mailbox windows.
+- Linux transport internals modularized into Linux-scoped units (`core_io`, `state_dc`, mailbox, FoE/EoE, topology, process image) with facade-stable API.
 - Mailbox robustness hardening: strict SDO response matching (index/subindex + segment toggle) with filtering of unrelated CoE mailbox frames.
 - Mailbox robustness hardening: SM0/SM1 status-aware mailbox gating and bounded retry/backoff for transient timeout/busy conditions.
 - Mailbox robustness hardening: mailbox-counter correlation per SDO transaction and emergency-frame queueing during mailbox waits.
 - Mailbox regression coverage: mixed-stream protocol tests for emergency + stale frame + valid correlated response selection.
+- Refactor cohesion regression coverage: `transport_module_boundary_tests` to prevent module-responsibility drift.
 - Mailbox status modes for ESC variance: `OEC_MAILBOX_STATUS_MODE=strict|hybrid|poll` (default `hybrid`).
 - Mailbox emergency queue hardening: bounded queue with overflow/drop accounting (`OEC_MAILBOX_EMERGENCY_QUEUE_LIMIT`).
 - Mailbox error taxonomy diagnostics: timeout/busy/parse/stale/abort/transport-IO class counters.

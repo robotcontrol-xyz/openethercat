@@ -17,7 +17,11 @@ Keep `LinuxRawSocketTransport` as a stable `ITransport` facade while splitting i
 Linux-only implementation is split into Linux-scoped translation units:
 
 - `linux_raw_socket_transport.cpp`
-  - Core datagram exchange, AL state control, and transport facade plumbing.
+  - Transport facade plumbing and cycle-path orchestration.
+- `linux_raw_socket_transport_core_io.cpp`
+  - Linux socket lifecycle and core datagram send/receive wrapper.
+- `linux_raw_socket_transport_state_dc.cpp`
+  - AL-state operations and DC register read/write paths.
 - `linux_raw_socket_transport_mailbox.cpp`
   - Mailbox retry policy, SM window/status polling, CoE mailbox read/write helpers.
 - `linux_raw_socket_transport_foe_eoe.cpp`
