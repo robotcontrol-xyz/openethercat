@@ -50,7 +50,7 @@ flowchart TB
 - Build/parse EtherCAT datagrams and issue cyclic `LWR` (outputs) + `LRD` (inputs) exchanges.
 - Read/write AL state and AL status code registers.
 - Discover topology (`discoverTopology(...)`) and report redundancy link health.
-- Execute CoE mailbox SDO upload/download paths with strict response matching (address/toggle) and unrelated-frame filtering.
+- Execute CoE mailbox SDO upload/download paths with strict response matching (address/toggle/mailbox-counter), unrelated-frame filtering, and emergency-frame queueing.
 
 ### `oec::MockTransport`
 - Role: deterministic non-hardware transport for tests and demos.

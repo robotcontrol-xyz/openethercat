@@ -144,6 +144,12 @@ Use these environment variables when running Linux transport examples:
 - `OEC_MAILBOX_BACKOFF_BASE_MS=<ms>`: base delay for mailbox retry backoff (default `1` ms).
 - `OEC_MAILBOX_BACKOFF_MAX_MS=<ms>`: cap for mailbox retry backoff (default `20` ms).
 
+Mailbox robustness behavior in current Linux transport:
+
+- SDO responses are correlated by mailbox counter plus SDO context (address/toggle).
+- Unrelated CoE mailbox frames are ignored while waiting for the matching response.
+- CoE emergency frames observed during SDO waits are queued for later retrieval via `pollEmergency(...)`.
+
 Typical command:
 
 ```bash

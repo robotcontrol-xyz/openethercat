@@ -21,6 +21,7 @@ This repository provides:
 - Linux transport CoE segmented SDO upload/download implementation over configurable mailbox windows.
 - Mailbox robustness hardening: strict SDO response matching (index/subindex + segment toggle) with filtering of unrelated CoE mailbox frames.
 - Mailbox robustness hardening: SM0/SM1 status-aware mailbox gating and bounded retry/backoff for transient timeout/busy conditions.
+- Mailbox robustness hardening: mailbox-counter correlation per SDO transaction and emergency-frame queueing during mailbox waits.
 - FoE/EoE service APIs (read/write file, send/receive encapsulated Ethernet frame).
 - Distributed clock sync controller with filtered offset, PI correction, and jitter stats.
 - Topology manager with hot-connect/missing detection and redundancy health checks.

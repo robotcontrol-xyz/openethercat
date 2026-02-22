@@ -7,9 +7,11 @@
 
 #include <array>
 #include <cstdint>
+#include <queue>
 #include <string>
 #include <vector>
 
+#include "openethercat/master/coe_mailbox.hpp"
 #include "openethercat/transport/i_transport.hpp"
 
 namespace oec {
@@ -95,6 +97,7 @@ private:
     int timeoutMs_ = 10;
     std::string error_;
     std::vector<ProcessDataWindow> outputWindows_;
+    std::queue<EmergencyMessage> emergencies_;
 };
 
 } // namespace oec
