@@ -12,6 +12,7 @@ namespace {
 
 constexpr std::uint16_t kCoeServiceSdoReq = 0x0002;
 constexpr std::uint16_t kCoeServiceSdoRes = 0x0003;
+constexpr std::uint16_t kCoeServiceEmergency = 0x0001;
 constexpr std::uint8_t kSdoCmdUploadInitiateReq = 0x40;
 constexpr std::uint8_t kSdoCmdUploadInitiateRes = 0x40;
 constexpr std::uint8_t kSdoCmdUploadSegmentReqBase = 0x60;
@@ -53,6 +54,25 @@ std::optional<EscMailboxFrame> CoeMailboxProtocol::decodeEscMailbox(const std::v
     frame.counter = static_cast<std::uint8_t>(bytes[5] & 0x07U);
     frame.payload.assign(bytes.begin() + 6, bytes.begin() + static_cast<std::ptrdiff_t>(6U + payloadBytes));
     return frame;
+}
+
+bool CoeMailboxProtocol::parseEmergency(const std::vector<std::uint8_t>& payload,
+                                        std::uint16_t slavePosition,
+                                        EmergencyMessage& outEmergency) {
+    if (payload.size() < 10U) {
+        return false;
+    }
+    const auto service = readLe16(payload, 0);
+    if (service != kCoeServiceEmergency) {
+        return false;
+    }
+    outEmergency.errorCode = readLe16(payload, 2);
+    outEmergency.errorRegister = payload[4];
+    for (std::size_t i = 0; i < outEmergency.manufacturerData.size(); ++i) {
+        outEmergency.manufacturerData[i] = payload[5U + i];
+    }
+    outEmergency.slavePosition = slavePosition;
+    return true;
 }
 
 std::vector<std::uint8_t> CoeMailboxProtocol::buildSdoInitiateUploadRequest(SdoAddress address) {

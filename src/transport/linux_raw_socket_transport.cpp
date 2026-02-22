@@ -61,7 +61,6 @@ constexpr std::uint16_t kEepErrorMask = 0x7800;
 constexpr std::uint16_t kSiiWordVendorId = 0x0008;
 constexpr std::uint16_t kSiiWordProductCode = 0x000A;
 constexpr std::uint16_t kAlStateMask = 0x000F;
-constexpr std::uint16_t kCoeServiceEmergency = 0x0001;
 
 bool openEthercatInterfaceSocket(const std::string& ifname,
                                  int& outSocketFd,
@@ -174,29 +173,6 @@ void sleepMailboxBackoff(int attempt, int baseDelayMs, int maxDelayMs) {
     const auto shift = std::min(attempt, 10);
     const auto delay = std::min(maxDelayMs, baseDelayMs << shift);
     std::this_thread::sleep_for(std::chrono::milliseconds(std::max(1, delay)));
-}
-
-bool decodeCoeEmergencyPayload(const std::vector<std::uint8_t>& payload,
-                               std::uint16_t slavePosition,
-                               EmergencyMessage& outEmergency) {
-    if (payload.size() < 10U) {
-        return false;
-    }
-    const auto service = static_cast<std::uint16_t>(
-        static_cast<std::uint16_t>(payload[0]) |
-        (static_cast<std::uint16_t>(payload[1]) << 8U));
-    if (service != kCoeServiceEmergency) {
-        return false;
-    }
-    outEmergency.errorCode = static_cast<std::uint16_t>(
-        static_cast<std::uint16_t>(payload[2]) |
-        (static_cast<std::uint16_t>(payload[3]) << 8U));
-    outEmergency.errorRegister = payload[4];
-    for (std::size_t i = 0; i < outEmergency.manufacturerData.size(); ++i) {
-        outEmergency.manufacturerData[i] = payload[5U + i];
-    }
-    outEmergency.slavePosition = slavePosition;
-    return true;
 }
 
 bool sendAndReceiveDatagram(
@@ -891,7 +867,7 @@ bool LinuxRawSocketTransport::sdoUpload(std::uint16_t slavePosition, const SdoAd
                 continue;
             }
             EmergencyMessage emergency {};
-            if (decodeCoeEmergencyPayload(decoded->payload, slavePosition, emergency)) {
+            if (CoeMailboxProtocol::parseEmergency(decoded->payload, slavePosition, emergency)) {
                 emergencies_.push(emergency);
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
                 continue;
@@ -1199,7 +1175,7 @@ bool LinuxRawSocketTransport::sdoDownload(std::uint16_t slavePosition, const Sdo
                 continue;
             }
             EmergencyMessage emergency {};
-            if (decodeCoeEmergencyPayload(decoded->payload, slavePosition, emergency)) {
+            if (CoeMailboxProtocol::parseEmergency(decoded->payload, slavePosition, emergency)) {
                 emergencies_.push(emergency);
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
                 continue;

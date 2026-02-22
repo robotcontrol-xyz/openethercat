@@ -70,6 +70,9 @@ public:
 
     static std::vector<std::uint8_t> encodeEscMailbox(const EscMailboxFrame& frame);
     static std::optional<EscMailboxFrame> decodeEscMailbox(const std::vector<std::uint8_t>& bytes);
+    static bool parseEmergency(const std::vector<std::uint8_t>& payload,
+                               std::uint16_t slavePosition,
+                               EmergencyMessage& outEmergency);
 
     static std::vector<std::uint8_t> buildSdoInitiateUploadRequest(SdoAddress address);
     static CoeSdoInitiateUploadResponse parseSdoInitiateUploadResponse(const std::vector<std::uint8_t>& payload,
