@@ -50,6 +50,18 @@ void printUsage(const char* argv0) {
               << "  " << argv0 << " linux:enp2s0 1 0x1018 0x01 5000\n";
 }
 
+const char* toModeName(oec::MailboxStatusMode mode) {
+    switch (mode) {
+    case oec::MailboxStatusMode::Strict:
+        return "strict";
+    case oec::MailboxStatusMode::Hybrid:
+        return "hybrid";
+    case oec::MailboxStatusMode::Poll:
+        return "poll";
+    }
+    return "hybrid";
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -88,6 +100,7 @@ int main(int argc, char** argv) {
         auto* linux = dynamic_cast<oec::LinuxRawSocketTransport*>(transport.get());
         if (linux) {
             linux->resetMailboxDiagnostics();
+            std::cout << "mailbox_status_mode=" << toModeName(linux->mailboxStatusMode()) << '\n';
         }
 
         const oec::SdoAddress address{.index = index, .subIndex = subIndex};

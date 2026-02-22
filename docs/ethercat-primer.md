@@ -143,12 +143,15 @@ Use these environment variables when running Linux transport examples:
 - `OEC_MAILBOX_RETRIES=<N>`: retry count for transient mailbox datagram failures (default `2`).
 - `OEC_MAILBOX_BACKOFF_BASE_MS=<ms>`: base delay for mailbox retry backoff (default `1` ms).
 - `OEC_MAILBOX_BACKOFF_MAX_MS=<ms>`: cap for mailbox retry backoff (default `20` ms).
+- `OEC_MAILBOX_STATUS_MODE=strict|hybrid|poll`: mailbox status-bit handling mode (default `hybrid`).
 
 Mailbox robustness behavior in current Linux transport:
 
 - SDO responses are correlated by mailbox counter plus SDO context (address/toggle).
 - Unrelated CoE mailbox frames are ignored while waiting for the matching response.
 - CoE emergency frames observed during SDO waits are queued for later retrieval via `pollEmergency(...)`.
+- `strict` mode enforces SM status availability/readiness before mailbox transfer.
+- `poll` mode skips status-bit gating and relies on mailbox polling cadence.
 
 Typical command:
 

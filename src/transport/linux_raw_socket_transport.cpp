@@ -155,6 +155,20 @@ const char* commandName(std::uint8_t cmd) {
     }
 }
 
+MailboxStatusMode parseMailboxStatusMode(const char* value) {
+    if (value == nullptr) {
+        return MailboxStatusMode::Hybrid;
+    }
+    const std::string text(value);
+    if (text == "strict") {
+        return MailboxStatusMode::Strict;
+    }
+    if (text == "poll") {
+        return MailboxStatusMode::Poll;
+    }
+    return MailboxStatusMode::Hybrid;
+}
+
 bool isIgnorableSdoParseError(const std::string& error) {
     return (error.find("Unexpected CoE service") != std::string::npos) ||
            (error.find("Unexpected SDO command") != std::string::npos) ||
@@ -299,6 +313,7 @@ void LinuxRawSocketTransport::setMailboxConfiguration(std::uint16_t writeOffset,
 
 bool LinuxRawSocketTransport::open() {
     close();
+    mailboxStatusMode_ = parseMailboxStatusMode(std::getenv("OEC_MAILBOX_STATUS_MODE"));
     lastWorkingCounter_ = 0;
     if (!openEthercatInterfaceSocket(ifname_, socketFd_, ifIndex_, sourceMac_, error_)) {
         close();
@@ -680,6 +695,7 @@ bool LinuxRawSocketTransport::sdoUpload(std::uint16_t slavePosition, const SdoAd
         outError = "transport not open";
         return fail();
     }
+    const auto statusMode = mailboxStatusMode_;
     const auto adp = toAutoIncrementAddress(slavePosition);
     std::uint16_t writeOffset = mailboxWriteOffset_;
     std::uint16_t writeSize = mailboxWriteSize_;
@@ -797,16 +813,28 @@ bool LinuxRawSocketTransport::sdoUpload(std::uint16_t slavePosition, const SdoAd
 
     auto mailboxWrite = [&](const std::vector<std::uint8_t>& coePayload,
                             std::uint8_t& outCounter) -> bool {
-        // Status-driven gate: if SM0 reports mailbox full, briefly wait before writing.
-        for (int probe = 0; probe < 3; ++probe) {
-            std::uint8_t status = 0U;
-            if (!readSmStatus(0U, status)) {
-                break;
+        // Status-driven gate: configurable strategy to accommodate ESC variant differences.
+        if (statusMode != MailboxStatusMode::Poll) {
+            bool writeReady = false;
+            for (int probe = 0; probe < 3; ++probe) {
+                std::uint8_t status = 0U;
+                if (!readSmStatus(0U, status)) {
+                    if (statusMode == MailboxStatusMode::Strict) {
+                        outError = "SM0 status read failed in strict mode";
+                        return false;
+                    }
+                    break;
+                }
+                if ((status & 0x08U) == 0U) {
+                    writeReady = true;
+                    break;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
             }
-            if ((status & 0x08U) == 0U) {
-                break;
+            if (statusMode == MailboxStatusMode::Strict && !writeReady) {
+                outError = "SM0 mailbox remained busy in strict mode";
+                return false;
             }
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
 
         EscMailboxFrame frame;
@@ -845,14 +873,24 @@ bool LinuxRawSocketTransport::sdoUpload(std::uint16_t slavePosition, const SdoAd
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs_);
         int idlePolls = 0;
         while (std::chrono::steady_clock::now() < deadline) {
-            // Status-driven gate: wait until SM1 indicates data, but still sample periodically
-            // to stay compatible with ESC variants where status semantics differ.
-            std::uint8_t status = 0U;
-            const bool haveStatus = readSmStatus(1U, status);
-            const bool mailboxHasData = haveStatus && ((status & 0x08U) != 0U);
-            if (!mailboxHasData && ((idlePolls++ % 3) != 0)) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(1));
-                continue;
+            if (statusMode != MailboxStatusMode::Poll) {
+                // Status-driven read gate with strict/hybrid policies.
+                std::uint8_t status = 0U;
+                const bool haveStatus = readSmStatus(1U, status);
+                const bool mailboxHasData = haveStatus && ((status & 0x08U) != 0U);
+                if (statusMode == MailboxStatusMode::Strict) {
+                    if (!haveStatus) {
+                        outError = "SM1 status read failed in strict mode";
+                        return false;
+                    }
+                    if (!mailboxHasData) {
+                        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                        continue;
+                    }
+                } else if (!mailboxHasData && ((idlePolls++ % 3) != 0)) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                    continue;
+                }
             }
 
             const auto currentIndex = datagramIndex_++;
@@ -1007,6 +1045,7 @@ bool LinuxRawSocketTransport::sdoDownload(std::uint16_t slavePosition, const Sdo
         outError = "transport not open";
         return fail();
     }
+    const auto statusMode = mailboxStatusMode_;
     const auto adp = toAutoIncrementAddress(slavePosition);
     std::uint16_t writeOffset = mailboxWriteOffset_;
     std::uint16_t writeSize = mailboxWriteSize_;
@@ -1124,16 +1163,28 @@ bool LinuxRawSocketTransport::sdoDownload(std::uint16_t slavePosition, const Sdo
 
     auto mailboxWrite = [&](const std::vector<std::uint8_t>& coePayload,
                             std::uint8_t& outCounter) -> bool {
-        // Status-driven gate: if SM0 reports mailbox full, briefly wait before writing.
-        for (int probe = 0; probe < 3; ++probe) {
-            std::uint8_t status = 0U;
-            if (!readSmStatus(0U, status)) {
-                break;
+        // Status-driven gate: configurable strategy to accommodate ESC variant differences.
+        if (statusMode != MailboxStatusMode::Poll) {
+            bool writeReady = false;
+            for (int probe = 0; probe < 3; ++probe) {
+                std::uint8_t status = 0U;
+                if (!readSmStatus(0U, status)) {
+                    if (statusMode == MailboxStatusMode::Strict) {
+                        outError = "SM0 status read failed in strict mode";
+                        return false;
+                    }
+                    break;
+                }
+                if ((status & 0x08U) == 0U) {
+                    writeReady = true;
+                    break;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
             }
-            if ((status & 0x08U) == 0U) {
-                break;
+            if (statusMode == MailboxStatusMode::Strict && !writeReady) {
+                outError = "SM0 mailbox remained busy in strict mode";
+                return false;
             }
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
 
         EscMailboxFrame frame;
@@ -1172,14 +1223,24 @@ bool LinuxRawSocketTransport::sdoDownload(std::uint16_t slavePosition, const Sdo
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs_);
         int idlePolls = 0;
         while (std::chrono::steady_clock::now() < deadline) {
-            // Status-driven gate: wait until SM1 indicates data, but still sample periodically
-            // to stay compatible with ESC variants where status semantics differ.
-            std::uint8_t status = 0U;
-            const bool haveStatus = readSmStatus(1U, status);
-            const bool mailboxHasData = haveStatus && ((status & 0x08U) != 0U);
-            if (!mailboxHasData && ((idlePolls++ % 3) != 0)) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(1));
-                continue;
+            if (statusMode != MailboxStatusMode::Poll) {
+                // Status-driven read gate with strict/hybrid policies.
+                std::uint8_t status = 0U;
+                const bool haveStatus = readSmStatus(1U, status);
+                const bool mailboxHasData = haveStatus && ((status & 0x08U) != 0U);
+                if (statusMode == MailboxStatusMode::Strict) {
+                    if (!haveStatus) {
+                        outError = "SM1 status read failed in strict mode";
+                        return false;
+                    }
+                    if (!mailboxHasData) {
+                        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                        continue;
+                    }
+                } else if (!mailboxHasData && ((idlePolls++ % 3) != 0)) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                    continue;
+                }
             }
 
             const auto currentIndex = datagramIndex_++;
@@ -1943,5 +2004,7 @@ std::string LinuxRawSocketTransport::lastError() const { return error_; }
 std::uint16_t LinuxRawSocketTransport::lastWorkingCounter() const { return lastWorkingCounter_; }
 MailboxDiagnostics LinuxRawSocketTransport::mailboxDiagnostics() const { return mailboxDiagnostics_; }
 void LinuxRawSocketTransport::resetMailboxDiagnostics() { mailboxDiagnostics_ = MailboxDiagnostics{}; }
+void LinuxRawSocketTransport::setMailboxStatusMode(MailboxStatusMode mode) { mailboxStatusMode_ = mode; }
+MailboxStatusMode LinuxRawSocketTransport::mailboxStatusMode() const { return mailboxStatusMode_; }
 
 } // namespace oec

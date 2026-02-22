@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "openethercat/transport/coe_mailbox_protocol.hpp"
+#include "openethercat/transport/linux_raw_socket_transport.hpp"
 
 int main() {
     // ESC mailbox encode/decode round-trip.
@@ -157,6 +158,16 @@ int main() {
         assert(matched);
         assert(matchedData.size() == 3);
         assert(matchedData[0] == 0x44);
+    }
+
+    // Mailbox status mode API should be configurable without opening transport.
+    {
+        oec::LinuxRawSocketTransport transport("eth0");
+        assert(transport.mailboxStatusMode() == oec::MailboxStatusMode::Hybrid);
+        transport.setMailboxStatusMode(oec::MailboxStatusMode::Poll);
+        assert(transport.mailboxStatusMode() == oec::MailboxStatusMode::Poll);
+        transport.setMailboxStatusMode(oec::MailboxStatusMode::Strict);
+        assert(transport.mailboxStatusMode() == oec::MailboxStatusMode::Strict);
     }
 
     std::cout << "coe_mailbox_protocol_tests passed\n";

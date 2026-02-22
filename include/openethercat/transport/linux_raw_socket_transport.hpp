@@ -32,6 +32,15 @@ struct MailboxDiagnostics {
     std::uint64_t matchedResponses = 0;
 };
 
+/**
+ * @brief Mailbox status handling strategy for ESC SM status bits.
+ */
+enum class MailboxStatusMode {
+    Strict,
+    Hybrid,
+    Poll
+};
+
 class LinuxRawSocketTransport final : public ITransport {
 public:
     explicit LinuxRawSocketTransport(std::string ifname);
@@ -83,6 +92,8 @@ public:
     std::uint16_t lastWorkingCounter() const override;
     MailboxDiagnostics mailboxDiagnostics() const;
     void resetMailboxDiagnostics();
+    void setMailboxStatusMode(MailboxStatusMode mode);
+    MailboxStatusMode mailboxStatusMode() const;
 
 private:
     struct ProcessDataWindow {
@@ -117,6 +128,7 @@ private:
     std::vector<ProcessDataWindow> outputWindows_;
     std::queue<EmergencyMessage> emergencies_;
     MailboxDiagnostics mailboxDiagnostics_{};
+    MailboxStatusMode mailboxStatusMode_ = MailboxStatusMode::Hybrid;
 };
 
 } // namespace oec
