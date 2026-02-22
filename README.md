@@ -87,6 +87,11 @@ OEC_SOAK_JSON=1 ./build/mailbox_soak_demo linux:eth0 1 0x1018 0x01 1000
 # DC demo JSON mode + safe correction limits:
 OEC_DC_SOAK_JSON=1 OEC_DC_MAX_CORR_STEP_NS=20000 OEC_DC_MAX_SLEW_NS=5000 \
   ./build/dc_hardware_sync_demo linux:eth0 1 500 10
+# Enable closed-loop DC control directly in EthercatMaster::runCycle():
+OEC_DC_CLOSED_LOOP=1 OEC_DC_REFERENCE_SLAVE=1 OEC_DC_TARGET_PHASE_NS=0 \
+OEC_DC_KP=0.1 OEC_DC_KI=0.01 OEC_DC_CORRECTION_CLAMP_NS=20000 \
+OEC_DC_MAX_CORR_STEP_NS=20000 OEC_DC_MAX_SLEW_NS=5000 \
+  sudo ./build/beckhoff_io_demo linux:eth0
 ```
 
 The demo uses `MockTransport` so it runs without root and without EtherCAT hardware.

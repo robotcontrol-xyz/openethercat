@@ -204,3 +204,14 @@ For `dc_hardware_sync_demo`:
 - `OEC_DC_MAX_SLEW_NS=<N>`: max change between consecutive applied corrections (slew limiter).
 
 These limits help avoid aggressive correction steps while validating DC behavior on real hardware.
+
+For optional in-master closed-loop DC inside `EthercatMaster::runCycle`:
+
+- `OEC_DC_CLOSED_LOOP=1`: enable in-master DC loop.
+- `OEC_DC_REFERENCE_SLAVE=<pos>`: slave position used as DC reference (default `1`).
+- `OEC_DC_TARGET_PHASE_NS=<ns>`: optional host-vs-reference phase shift target.
+- `OEC_DC_FILTER_ALPHA=<0..1>`: PI input filtering alpha.
+- `OEC_DC_KP=<gain>` / `OEC_DC_KI=<gain>`: controller gains.
+- `OEC_DC_CORRECTION_CLAMP_NS=<ns>`: PI correction output clamp.
+- `OEC_DC_MAX_CORR_STEP_NS=<ns>`: per-cycle absolute correction limit.
+- `OEC_DC_MAX_SLEW_NS=<ns>`: per-cycle slew limit between applied corrections.

@@ -29,6 +29,8 @@
 
 namespace oec {
 
+class LinuxRawSocketTransport;
+
 /**
  * @brief High-level orchestration class for EtherCAT runtime.
  *
@@ -157,6 +159,10 @@ public:
     std::optional<std::int64_t> updateDistributedClock(std::int64_t referenceTimeNs,
                                                        std::int64_t localTimeNs);
     DcSyncStats distributedClockStats() const;
+    /**
+     * @brief Last applied DC correction from closed-loop mode (ns).
+     */
+    std::optional<std::int64_t> lastAppliedDcCorrectionNs() const;
 
     /**
      * @brief Refresh live topology snapshot from transport discovery.
@@ -176,7 +182,17 @@ public:
     std::string lastError() const;
 
 private:
+    struct DcClosedLoopOptions {
+        bool enabled = false;
+        std::uint16_t referenceSlavePosition = 1U;
+        std::int64_t targetPhaseNs = 0;
+        std::int64_t maxCorrectionStepNs = 20000;
+        std::int64_t maxSlewPerCycleNs = 5000;
+    };
+
     void setError(std::string message);
+    void configureDcClosedLoopFromEnvironment();
+    bool runDcClosedLoopUpdate();
     bool transitionNetworkTo(SlaveState target);
     bool transitionSlaveTo(std::uint16_t position, SlaveState target);
     bool recoverSlave(const SlaveDiagnostic& diagnostic);
@@ -186,6 +202,9 @@ private:
     CoeMailboxService mailbox_;
     FoeEoeService foeEoe_;
     DistributedClockController dcController_{};
+    DcClosedLoopOptions dcClosedLoopOptions_{};
+    std::optional<std::int64_t> lastAppliedDcCorrectionNs_;
+    LinuxRawSocketTransport* dcLinuxTransport_ = nullptr;
     TopologyManager topologyManager_;
     IoMapper mapper_;
     NetworkConfiguration config_{};

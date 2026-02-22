@@ -10,8 +10,77 @@
 #include <exception>
 #include <sstream>
 #include <algorithm>
+#include <cstdlib>
+#include <cmath>
+#include <type_traits>
+
+#include "openethercat/transport/linux_raw_socket_transport.hpp"
 
 namespace oec {
+namespace {
+
+bool parseBoolEnv(const char* name, bool defaultValue) {
+    const char* value = std::getenv(name);
+    if (value == nullptr) {
+        return defaultValue;
+    }
+    const std::string text(value);
+    if (text == "1" || text == "true" || text == "TRUE" || text == "on" || text == "ON") {
+        return true;
+    }
+    if (text == "0" || text == "false" || text == "FALSE" || text == "off" || text == "OFF") {
+        return false;
+    }
+    return defaultValue;
+}
+
+template <typename T>
+T parseIntegralEnv(const char* name, T defaultValue) {
+    const char* value = std::getenv(name);
+    if (value == nullptr) {
+        return defaultValue;
+    }
+    try {
+        if constexpr (std::is_signed<T>::value) {
+            return static_cast<T>(std::stoll(value, nullptr, 0));
+        } else {
+            return static_cast<T>(std::stoull(value, nullptr, 0));
+        }
+    } catch (...) {
+        return defaultValue;
+    }
+}
+
+double parseDoubleEnv(const char* name, double defaultValue) {
+    const char* value = std::getenv(name);
+    if (value == nullptr) {
+        return defaultValue;
+    }
+    try {
+        return std::stod(value);
+    } catch (...) {
+        return defaultValue;
+    }
+}
+
+std::int64_t clampDcStep(std::int64_t correctionNs,
+                         std::int64_t previousCorrectionNs,
+                         std::int64_t maxStepNs,
+                         std::int64_t maxSlewNs) {
+    auto clamped = correctionNs;
+    if (maxStepNs > 0 && std::llabs(clamped) > maxStepNs) {
+        clamped = (clamped < 0) ? -maxStepNs : maxStepNs;
+    }
+    if (maxSlewNs > 0) {
+        const auto delta = clamped - previousCorrectionNs;
+        if (std::llabs(delta) > maxSlewNs) {
+            clamped = previousCorrectionNs + ((delta < 0) ? -maxSlewNs : maxSlewNs);
+        }
+    }
+    return clamped;
+}
+
+} // namespace
 
 EthercatMaster::EthercatMaster(ITransport& transport)
     : transport_(transport), mailbox_(transport), foeEoe_(transport), topologyManager_(transport) {}
@@ -28,6 +97,9 @@ bool EthercatMaster::configure(const NetworkConfiguration& config) {
     reconfigureCounts_.clear();
     recoveryEvents_.clear();
     degraded_ = false;
+    dcController_.reset();
+    lastAppliedDcCorrectionNs_.reset();
+    dcLinuxTransport_ = nullptr;
 
     // Validate before binding signals to avoid partially configured runtime state.
     const auto issues = ConfigurationValidator::validate(config);
@@ -67,6 +139,7 @@ bool EthercatMaster::start() {
         setError("Transport open failed: " + transport_.lastError());
         return false;
     }
+    configureDcClosedLoopFromEnvironment();
 
     // Optionally drive a full AL startup ladder so cyclic exchange starts from OP.
     if (stateMachineOptions_.enable) {
@@ -101,6 +174,7 @@ void EthercatMaster::stop() {
         transport_.close();
         started_ = false;
     }
+    dcLinuxTransport_ = nullptr;
 }
 
 bool EthercatMaster::runCycle() {
@@ -131,6 +205,11 @@ bool EthercatMaster::runCycle() {
         }
         processImage_.inputBytes() = rx;
         statistics_.lastWorkingCounter = transport_.lastWorkingCounter();
+        if (!runDcClosedLoopUpdate()) {
+            ++statistics_.cyclesFailed;
+            ++statistics_.cyclesTotal;
+            return false;
+        }
         // Dispatch callbacks only after a consistent full-image update.
         mapper_.dispatchInputChanges(processImage_);
         const auto end = std::chrono::steady_clock::now();
@@ -382,6 +461,11 @@ DcSyncStats EthercatMaster::distributedClockStats() const {
     return dcController_.stats();
 }
 
+std::optional<std::int64_t> EthercatMaster::lastAppliedDcCorrectionNs() const {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    return lastAppliedDcCorrectionNs_;
+}
+
 bool EthercatMaster::refreshTopology(std::string& outError) {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
     return topologyManager_.refresh(outError);
@@ -430,6 +514,73 @@ std::string EthercatMaster::lastError() const {
 }
 
 void EthercatMaster::setError(std::string message) { error_ = std::move(message); }
+
+void EthercatMaster::configureDcClosedLoopFromEnvironment() {
+    dcClosedLoopOptions_.enabled = parseBoolEnv("OEC_DC_CLOSED_LOOP", dcClosedLoopOptions_.enabled);
+    dcClosedLoopOptions_.referenceSlavePosition =
+        parseIntegralEnv<std::uint16_t>("OEC_DC_REFERENCE_SLAVE", dcClosedLoopOptions_.referenceSlavePosition);
+    dcClosedLoopOptions_.targetPhaseNs =
+        parseIntegralEnv<std::int64_t>("OEC_DC_TARGET_PHASE_NS", dcClosedLoopOptions_.targetPhaseNs);
+    dcClosedLoopOptions_.maxCorrectionStepNs =
+        parseIntegralEnv<std::int64_t>("OEC_DC_MAX_CORR_STEP_NS", dcClosedLoopOptions_.maxCorrectionStepNs);
+    dcClosedLoopOptions_.maxSlewPerCycleNs =
+        parseIntegralEnv<std::int64_t>("OEC_DC_MAX_SLEW_NS", dcClosedLoopOptions_.maxSlewPerCycleNs);
+
+    DistributedClockController::Options dcOptions{};
+    dcOptions.filterAlpha = parseDoubleEnv("OEC_DC_FILTER_ALPHA", dcOptions.filterAlpha);
+    dcOptions.kp = parseDoubleEnv("OEC_DC_KP", dcOptions.kp);
+    dcOptions.ki = parseDoubleEnv("OEC_DC_KI", dcOptions.ki);
+    dcOptions.correctionClampNs =
+        parseIntegralEnv<std::int64_t>("OEC_DC_CORRECTION_CLAMP_NS", dcOptions.correctionClampNs);
+    dcController_ = DistributedClockController(dcOptions);
+    dcController_.reset();
+
+    lastAppliedDcCorrectionNs_.reset();
+    dcLinuxTransport_ = dynamic_cast<LinuxRawSocketTransport*>(&transport_);
+}
+
+bool EthercatMaster::runDcClosedLoopUpdate() {
+    if (!dcClosedLoopOptions_.enabled) {
+        return true;
+    }
+    if (dcLinuxTransport_ == nullptr) {
+        setError("DC closed-loop requires LinuxRawSocketTransport");
+        return false;
+    }
+
+    std::int64_t slaveTimeNs = 0;
+    std::string dcError;
+    if (!dcLinuxTransport_->readDcSystemTime(dcClosedLoopOptions_.referenceSlavePosition, slaveTimeNs, dcError)) {
+        setError("DC read failed: " + dcError);
+        return false;
+    }
+
+    const auto hostNow = std::chrono::steady_clock::now().time_since_epoch();
+    const auto hostTimeNs = std::chrono::duration_cast<std::chrono::nanoseconds>(hostNow).count() +
+                            dcClosedLoopOptions_.targetPhaseNs;
+
+    DcSyncSample sample;
+    sample.referenceTimeNs = slaveTimeNs;
+    sample.localTimeNs = hostTimeNs;
+    const auto correction = dcController_.update(sample);
+    if (!correction.has_value()) {
+        return true;
+    }
+
+    const auto previous = lastAppliedDcCorrectionNs_.value_or(0);
+    const auto safeCorrection = clampDcStep(*correction,
+                                            previous,
+                                            dcClosedLoopOptions_.maxCorrectionStepNs,
+                                            dcClosedLoopOptions_.maxSlewPerCycleNs);
+    if (!dcLinuxTransport_->writeDcSystemTimeOffset(dcClosedLoopOptions_.referenceSlavePosition,
+                                                    safeCorrection, dcError)) {
+        setError("DC write failed: " + dcError);
+        return false;
+    }
+
+    lastAppliedDcCorrectionNs_ = safeCorrection;
+    return true;
+}
 
 bool EthercatMaster::transitionNetworkTo(SlaveState target) {
     if (!transport_.requestNetworkState(target)) {
