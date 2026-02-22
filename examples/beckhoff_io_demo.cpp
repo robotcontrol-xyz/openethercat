@@ -31,6 +31,7 @@ void handleSignal(int) {
 int main(int argc, char** argv) {
     std::signal(SIGINT, handleSignal);
 
+    // CLI arguments select transport and optional ENI/ESI override paths.
     const std::string transportSpec = (argc > 1) ? argv[1] : "mock";
     const std::string eniPath = (argc > 2) ? argv[2] : "examples/config/beckhoff_demo.eni.xml";
     const std::string esiDir = (argc > 3) ? argv[3] : "examples/config";
@@ -45,6 +46,7 @@ int main(int argc, char** argv) {
         std::cerr << "Config load failed: " << error << '\n';
         return 1;
     }
+    // Optional channel remap lets one binary test any EL1004/EL2004 channel pair.
     int selectedChannel = 1;
     if (const char* env = std::getenv("OEC_IO_CHANNEL")) {
         try {
@@ -67,6 +69,7 @@ int main(int argc, char** argv) {
         }
     }
 
+    // Runtime tracing knobs are environment-driven to keep CLI compact.
     bool traceCycle = true;
     if (const char* env = std::getenv("OEC_TRACE_CYCLE")) {
         traceCycle = std::string(env) != "0";
@@ -91,6 +94,7 @@ int main(int argc, char** argv) {
         traceDcQualityJson = std::string(env) != "0";
     }
 
+    // Transport factory keeps example logic independent from concrete transport class.
     oec::TransportFactoryConfig transportConfig;
     transportConfig.mockInputBytes = config.processImageInputBytes;
     transportConfig.mockOutputBytes = config.processImageOutputBytes;
@@ -111,6 +115,7 @@ int main(int argc, char** argv) {
         std::cerr << "Configure failed: " << master.lastError() << '\n';
         return 1;
     }
+    // Logical callback demonstrates decoupled app mapping (name -> process-image location).
     if (!master.onInputChange("StartButton", [&](bool state) {
             std::cout << "Callback: StartButton=" << (state ? "ON" : "OFF") << '\n';
             if (!master.setOutputByName("LampGreen", state)) {
@@ -129,6 +134,7 @@ int main(int argc, char** argv) {
     auto* mock = dynamic_cast<oec::MockTransport*>(transport.get());
     auto* linuxTransport = dynamic_cast<oec::LinuxRawSocketTransport*>(transport.get());
     if (mock) {
+        // Mock mode injects synthetic input toggles to verify callback/output behavior.
         std::cout << "Simulating EL1004 input toggles and controlling EL2004 output on channel "
                   << selectedChannel << ". Press Ctrl-C to stop.\n";
         int cycle = 0;
@@ -190,6 +196,7 @@ int main(int argc, char** argv) {
             ++cycle;
         }
     } else {
+        // Physical mode toggles output periodically so a loopback wire can trigger input callback.
         std::cout << "Running physical cycle mode; toggling EL2004 output channel "
                   << selectedChannel << " to trigger EL1004 callback channel "
                   << selectedChannel << ". "

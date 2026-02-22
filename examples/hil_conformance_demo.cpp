@@ -13,6 +13,7 @@
 #include "openethercat/transport/mock_transport.hpp"
 
 int main() {
+    // Define a small deterministic topology so KPI outputs are reproducible in CI.
     oec::NetworkConfiguration cfg;
     cfg.processImageInputBytes = 1;
     cfg.processImageOutputBytes = 1;
@@ -32,10 +33,12 @@ int main() {
         return 1;
     }
 
+    // Capture per-cycle runtime to evaluate p99 latency against acceptance limits.
     std::vector<double> runtimes;
     runtimes.reserve(4000);
 
     for (int i = 0; i < 4000; ++i) {
+        // Inject periodic transient faults to exercise recovery and degraded-cycle accounting.
         if (i > 0 && i % 500 == 0) {
             transport.setSlaveAlStatusCode(2, 0x0017U);
             transport.requestSlaveState(2, oec::SlaveState::SafeOp);
@@ -53,6 +56,7 @@ int main() {
     const auto p99Index = static_cast<std::size_t>(0.99 * static_cast<double>(runtimes.size() - 1));
     const auto p99 = runtimes[p99Index];
 
+    // Evaluate observed behavior against configurable HIL pass/fail criteria.
     const auto report = master.evaluateHilConformance(0.01, 500.0, 2000, p99);
     std::cout << "kpi.cycles=" << report.kpi.cycles
               << " failures=" << report.kpi.cycleFailures

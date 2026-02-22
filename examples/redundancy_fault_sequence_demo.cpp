@@ -62,11 +62,13 @@ void printStatus(const oec::EthercatMaster& master, std::size_t stepIndex, const
 } // namespace
 
 int main() {
+    // JSON mode is used by CI soak pipelines for machine-readable KPI ingest.
     const bool jsonMode = (std::getenv("OEC_SOAK_JSON") != nullptr);
 
     oec::MockTransport transport(1, 1);
     oec::EthercatMaster master(transport);
 
+    // Minimal one-slave config; focus here is redundancy policy transitions.
     oec::NetworkConfiguration config;
     config.processImageInputBytes = 1;
     config.processImageOutputBytes = 1;
@@ -81,6 +83,7 @@ int main() {
         std::cerr << "Configure failed: " << master.lastError() << '\n';
         return 1;
     }
+    // Disable state-machine transitions in mock so scripted fault sequence dominates behavior.
     auto stateOptions = oec::EthercatMaster::StateMachineOptions{};
     stateOptions.enable = false;
     master.setStateMachineOptions(stateOptions);
@@ -101,6 +104,7 @@ int main() {
         {.position = 0, .vendorId = 0x00000002, .productCode = 0x044c2c52, .online = true},
     });
 
+    // Scripted redundancy states to force degrade/recover timelines.
     const std::vector<Step> steps = {
         {"healthy", true, 8},
         {"cable_break", false, 10},
@@ -114,6 +118,7 @@ int main() {
     for (std::size_t i = 0; i < steps.size(); ++i) {
         transport.setRedundancyHealthy(steps[i].redundancyHealthy);
         for (int c = 0; c < steps[i].cycles; ++c) {
+            // Refresh topology before each cycle so policy logic sees updated health immediately.
             if (!master.refreshTopology(error)) {
                 std::cerr << "refreshTopology failed: " << error << '\n';
                 master.stop();

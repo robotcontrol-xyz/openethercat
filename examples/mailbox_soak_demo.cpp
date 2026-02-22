@@ -104,6 +104,7 @@ int main(int argc, char** argv) {
             static_cast<std::size_t>((argc > 5) ? parseUnsigned(argv[5], "cycles") : 1000U);
         const bool jsonMode = (std::getenv("OEC_SOAK_JSON") != nullptr);
 
+        // Create transport through factory so the same benchmark works on mock/Linux.
         oec::TransportFactoryConfig config;
         std::string error;
         if (!oec::TransportFactory::parseTransportSpec(transportSpec, config, error)) {
@@ -120,6 +121,7 @@ int main(int argc, char** argv) {
             return 1;
         }
 
+        // Linux transport exposes mailbox diagnostics/status tuning not present on all transports.
         auto* linux = dynamic_cast<oec::LinuxRawSocketTransport*>(transport.get());
         if (linux) {
             linux->resetMailboxDiagnostics();
@@ -132,6 +134,7 @@ int main(int argc, char** argv) {
             }
         }
 
+        // Probe a single object repeatedly to characterize mailbox latency and failure classes.
         const oec::SdoAddress address{.index = index, .subIndex = subIndex};
         std::vector<double> latenciesUs;
         latenciesUs.reserve(cycles);
@@ -139,6 +142,7 @@ int main(int argc, char** argv) {
         std::size_t failed = 0U;
 
         for (std::size_t i = 0; i < cycles; ++i) {
+            // Each iteration performs one full CoE SDO upload transaction.
             std::vector<std::uint8_t> data;
             std::uint32_t abortCode = 0U;
             std::string sdoError;
@@ -167,6 +171,7 @@ int main(int argc, char** argv) {
                 }
             }
 
+            // Emit rolling percentiles to observe drift/instability during long runs.
             if ((i + 1U) % 200U == 0U || (i + 1U) == cycles) {
                 const double p50 = percentile(latenciesUs, 50.0);
                 const double p95 = percentile(latenciesUs, 95.0);

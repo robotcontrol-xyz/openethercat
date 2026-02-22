@@ -103,7 +103,7 @@ int main() {
 
     El6692BridgeSimulator bridge;
 
-    // Prime bridge traffic.
+    // Prime bridge traffic so both sides have valid initial mailbox payloads.
     const auto initPayload = packBridgePayload(0, 0, 0x01);
     masterA.writeOutputBytes(kBridgeTxOffset, initPayload);
     masterB.writeOutputBytes(kBridgeTxOffset, initPayload);
@@ -113,6 +113,7 @@ int main() {
 
     std::cout << "EL6692 bridge demo running\n";
     for (std::uint16_t cycle = 1; cycle <= 12; ++cycle) {
+        // Compose independent payloads from strand A and B.
         const auto aPayload = packBridgePayload(cycle, static_cast<std::int32_t>(cycle * 100), 0xA1);
         const auto bPayload = packBridgePayload(cycle, static_cast<std::int32_t>(-static_cast<int>(cycle) * 50), 0xB2);
 
@@ -124,6 +125,7 @@ int main() {
             return 1;
         }
 
+        // Simulate bridge forwarding by copying each side TX image into the opposite RX image.
         bridge.transfer(transportA, transportB);
 
         // Next cycle reads bridged data into input image.

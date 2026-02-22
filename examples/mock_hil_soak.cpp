@@ -10,6 +10,7 @@
 #include "openethercat/transport/mock_transport.hpp"
 
 int main() {
+    // Basic EL1004/EL2004 map used for long-run recovery soak in pure mock mode.
     oec::NetworkConfiguration cfg;
     cfg.processImageInputBytes = 1;
     cfg.processImageOutputBytes = 1;
@@ -24,6 +25,7 @@ int main() {
 
     oec::MockTransport transport(1, 1);
     oec::EthercatMaster master(transport);
+    // Raise retry/reconfigure limits so injected faults exercise deeper recovery paths.
     oec::EthercatMaster::RecoveryOptions recovery;
     recovery.maxRetriesPerSlave = 2;
     recovery.maxReconfigurePerSlave = 2;
@@ -38,6 +40,7 @@ int main() {
     constexpr int cycles = 5000;
     int failures = 0;
     for (int c = 0; c < cycles; ++c) {
+        // Periodically force SAFE-OP + exchange failure to trigger policy handling.
         if (c > 0 && c % 500 == 0) {
             transport.setSlaveAlStatusCode(2, 0x0017U);
             transport.requestSlaveState(2, oec::SlaveState::SafeOp);
@@ -48,6 +51,7 @@ int main() {
             ++failures;
         }
 
+        // Periodically touch DC path so soak captures mixed feature usage.
         if (c % 1000 == 0) {
             auto dc = master.updateDistributedClock(10'000'000LL + c * 1000LL, 10'000'300LL + c * 1000LL);
             (void)dc;

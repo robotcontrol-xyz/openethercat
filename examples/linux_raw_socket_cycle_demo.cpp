@@ -23,6 +23,7 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    // Accept either full transport specs or plain interface names for convenience.
     const std::string transportArg = argv[1];
     const std::string transportSpec = (transportArg.rfind("linux:", 0) == 0 || transportArg == "mock")
                                           ? transportArg
@@ -30,6 +31,7 @@ int main(int argc, char** argv) {
     const std::string eniPath = (argc > 2) ? argv[2] : "examples/config/beckhoff_demo.eni.xml";
     const std::string esiDir = (argc > 3) ? argv[3] : "examples/config";
 
+    // Load ENI/ESI to obtain process image sizes and logical signal bindings.
     oec::NetworkConfiguration config;
     std::string error;
     if (!oec::ConfigurationLoader::loadFromEniAndEsiDirectory(eniPath, esiDir, config, error)) {
@@ -37,6 +39,7 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    // Build transport through the shared factory used by all examples.
     oec::TransportFactoryConfig transportConfig;
     transportConfig.mockInputBytes = config.processImageInputBytes;
     transportConfig.mockOutputBytes = config.processImageOutputBytes;
@@ -56,12 +59,14 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    // Run periodic cyclic exchange on a dedicated controller loop.
     oec::CycleController controller;
     oec::CycleControllerOptions options;
     options.period = 1ms;
     options.maxConsecutiveFailures = 3;
 
     controller.start(master, options, [&](const oec::CycleReport& report) {
+        // Keep diagnostics lightweight to avoid perturbing cycle timing.
         if (!report.success) {
             std::cerr << "Cycle " << report.cycleIndex << " failed: " << master.lastError() << '\n';
             return;

@@ -13,8 +13,10 @@
 #include "openethercat/transport/transport_factory.hpp"
 
 int main(int argc, char** argv) {
+    // Allow runtime selection of mock or Linux transport for the same demo logic.
     const std::string transportSpec = (argc > 1) ? argv[1] : "mock";
 
+    // Build a minimal mixed-I/O network used for CoE, topology, and DC API calls.
     oec::NetworkConfiguration cfg;
     cfg.processImageInputBytes = 1;
     cfg.processImageOutputBytes = 1;
@@ -48,6 +50,7 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    // CoE examples: write/read a test object and perform a simple PDO map call.
     const auto sdoWr = master.sdoDownload(2, {.index = 0x2000, .subIndex = 1}, {0x11, 0x22});
     const auto sdoRd = master.sdoUpload(2, {.index = 0x2000, .subIndex = 1});
     std::cout << "sdo_wr=" << (sdoWr.success ? 1 : 0) << " sdo_rd_len=" << sdoRd.data.size() << '\n';
@@ -56,6 +59,7 @@ int main(int argc, char** argv) {
     const bool pdoOk = master.configureRxPdo(2, {{.index = 0x7000, .subIndex = 1, .bitLength = 1}}, pdoErr);
     std::cout << "pdo_cfg=" << (pdoOk ? 1 : 0) << " err=" << pdoErr << '\n';
 
+    // Seed mock discovery data so topology APIs return deterministic content.
     if (auto* mock = dynamic_cast<oec::MockTransport*>(transport.get())) {
         mock->setDiscoveredSlaves({
             {.position = 1, .vendorId = 0x2, .productCode = 0x03ec3052, .online = true},
@@ -69,6 +73,7 @@ int main(int argc, char** argv) {
                   << '\n';
     }
 
+    // Feed synthetic reference/local times through the DC controller.
     for (int i = 0; i < 10; ++i) {
         const auto corr = master.updateDistributedClock(1'000'000LL * (i + 1), 1'000'000LL * (i + 1) - 500 + i * 10);
         if (corr) {

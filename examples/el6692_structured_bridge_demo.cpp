@@ -218,6 +218,7 @@ public:
 } // namespace
 
 int main() {
+    // Build two mirrored masters representing both sides of an EL6692 bridge pair.
     oec::NetworkConfiguration cfgA;
     cfgA.processImageInputBytes = kProcessBytes;
     cfgA.processImageOutputBytes = kProcessBytes;
@@ -251,6 +252,7 @@ int main() {
 
     std::cout << "EL6692 structured bridge demo running\n";
     for (int cycle = 1; cycle <= 16; ++cycle) {
+        // Inject one command from A; endpoint logic handles retries/acks automatically.
         if (cycle == 2) {
             epA.requestCommand(0x31, {0x10, 0x20, 0x30, 0x40}, cycle);
         }
@@ -264,6 +266,7 @@ int main() {
         ma.runCycle();
         mb.runCycle();
 
+        // Bridge wire copies process-image frames and injects temporary link loss B->A.
         wire.transfer(cycle, ta, tb);
 
         ma.runCycle();
@@ -274,6 +277,7 @@ int main() {
         ma.readInputBytes(kBridgeRxOffset, kFrameBytes, inA);
         mb.readInputBytes(kBridgeRxOffset, kFrameBytes, inB);
 
+        // Parse framed payloads with CRC and feed endpoint state machines.
         if (const auto fA = parse(inA)) {
             epA.onReceived(*fA, cycle);
         }

@@ -81,6 +81,7 @@ int main(int argc, char** argv) {
         const bool jsonMode = (std::getenv("OEC_SOAK_JSON") != nullptr) ||
                               (std::getenv("OEC_DC_SOAK_JSON") != nullptr);
 
+        // Load network definition so soak run uses the same mapping as normal operation.
         oec::NetworkConfiguration config;
         std::string error;
         if (!oec::ConfigurationLoader::loadFromEniAndEsiDirectory(eniPath, esiDir, config, error)) {
@@ -88,6 +89,7 @@ int main(int argc, char** argv) {
             return 1;
         }
 
+        // Build selected transport and propagate process-image sizes for mock mode.
         oec::TransportFactoryConfig tc;
         tc.mockInputBytes = config.processImageInputBytes;
         tc.mockOutputBytes = config.processImageOutputBytes;
@@ -120,6 +122,7 @@ int main(int argc, char** argv) {
                       << "s at " << periodUs << "us period. Press Ctrl-C to stop.\n";
         }
 
+        // Fixed-rate loop state for latency/jitter KPI collection.
         const auto start = std::chrono::steady_clock::now();
         auto nextWake = start;
         auto prevWake = start;
@@ -146,6 +149,7 @@ int main(int argc, char** argv) {
             const auto wakeErrNs = static_cast<std::uint64_t>(std::llabs(wakeDelta - targetDelta));
             prevWake = now;
 
+            // Measure runCycle runtime as an application-visible determinism metric.
             const auto cycleBegin = std::chrono::steady_clock::now();
             if (!master.runCycle()) {
                 ++failures;
@@ -164,6 +168,7 @@ int main(int argc, char** argv) {
                 wakeJitterNsWindow.pop_front();
             }
 
+            // Track DC lock duty and lock/unlock transitions over the soak window.
             const auto dc = master.distributedClockQuality();
             if (dc.locked) {
                 ++lockedCycles;
@@ -204,6 +209,7 @@ int main(int argc, char** argv) {
                 lastReport = now;
             }
 
+            // Sleep to absolute next deadline to avoid cumulative drift from relative sleeps.
             nextWake += std::chrono::microseconds(periodUs);
             std::this_thread::sleep_until(nextWake);
         }

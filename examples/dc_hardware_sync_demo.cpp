@@ -83,6 +83,7 @@ int main(int argc, char** argv) {
                                           ? parseUnsigned(std::getenv("OEC_DC_MAX_SLEW_NS"), "OEC_DC_MAX_SLEW_NS")
                                           : 5000U);
 
+        // Parse/create transport from spec so this demo can run on different NIC setups.
         oec::TransportFactoryConfig tc;
         std::string error;
         if (!oec::TransportFactory::parseTransportSpec(spec, tc, error)) {
@@ -103,8 +104,10 @@ int main(int argc, char** argv) {
             std::cerr << "Transport open failed: " << linux->lastError() << '\n';
             return 1;
         }
+        // Reset counters so reported diagnostics belong only to this run.
         linux->resetDcDiagnostics();
 
+        // PI controller running on host, correction applied to slave DC offset register.
         oec::DistributedClockController dc({
             .filterAlpha = 0.2,
             .kp = 0.1,
@@ -134,6 +137,7 @@ int main(int argc, char** argv) {
         constexpr std::int64_t kControllerClampNs = 20000;
 
         for (std::size_t i = 0; i < samples; ++i) {
+            // Step 1: sample current reference slave DC time.
             std::int64_t slaveNs = 0;
             if (!linux->readDcSystemTime(slavePosition, slaveNs, error)) {
                 std::cerr << "readDcSystemTime failed at sample " << i << ": " << error << '\n';
@@ -141,6 +145,7 @@ int main(int argc, char** argv) {
                 return 2;
             }
 
+            // Step 2: compute host-reference phase error and controller correction.
             const auto hostNow = std::chrono::steady_clock::now().time_since_epoch();
             const auto hostNs = std::chrono::duration_cast<std::chrono::nanoseconds>(hostNow).count();
             const auto corr = dc.update({.referenceTimeNs = slaveNs, .localTimeNs = hostNs});
@@ -150,6 +155,7 @@ int main(int argc, char** argv) {
                 }
                 bool stepClamped = false;
                 bool slewClamped = false;
+                // Apply extra safety limiting before writing offset to hardware.
                 const auto safeCorr = clampStep(*corr, lastAppliedCorrectionNs,
                                                 maxCorrectionStepNs, maxSlewPerCycleNs,
                                                 stepClamped, slewClamped);

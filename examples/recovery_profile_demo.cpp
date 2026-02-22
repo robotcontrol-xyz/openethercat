@@ -12,6 +12,7 @@
 #include "openethercat/transport/mock_transport.hpp"
 
 int main() {
+    // Base ENI/ESI config defines network and process image expected by the profile.
     oec::NetworkConfiguration config;
     std::string error;
     if (!oec::ConfigurationLoader::loadFromEniAndEsiDirectory(
@@ -20,6 +21,7 @@ int main() {
         return 1;
     }
 
+    // Profile maps AL status codes to explicit policy overrides.
     oec::RecoveryProfile profile;
     if (!oec::RecoveryProfileLoader::loadFromJsonFile("examples/config/recovery_profile.json", profile, error)) {
         std::cerr << "Recovery profile load failed: " << error << '\n';
@@ -33,6 +35,7 @@ int main() {
         return 1;
     }
 
+    // Apply profile overrides before injecting the test fault.
     for (const auto& entry : profile.actionByAlStatusCode) {
         master.setRecoveryActionOverride(entry.first, entry.second);
     }
@@ -42,6 +45,7 @@ int main() {
 
     (void)master.runCycle();
 
+    // Recovery event history is the primary artifact for policy verification.
     const auto events = master.recoveryEvents();
     for (const auto& e : events) {
         std::cout << "cycle=" << e.cycleIndex

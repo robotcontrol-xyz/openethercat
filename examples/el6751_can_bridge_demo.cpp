@@ -114,6 +114,7 @@ int main() {
 
     std::cout << "EL6751 CAN bridge demo running\n";
     for (int cycle = 1; cycle <= 8; ++cycle) {
+        // Compose one CAN frame and map it into EL6751 TX PDO bytes.
         CanFrame outgoing;
         outgoing.cobId = 0x180U + static_cast<std::uint32_t>(cycle);
         outgoing.dlc = 8;
@@ -135,6 +136,7 @@ int main() {
         mTerminal.runCycle();
         mBus.runCycle();
 
+        // Simulate EL6751 forwarding and status updates across both mock masters.
         sim.transfer(tTerminal, tBus);
 
         mTerminal.runCycle();
@@ -148,6 +150,7 @@ int main() {
         mTerminal.getInputByName("CanReady", canReady);
         mTerminal.getInputByName("CanTxDone", txDone);
 
+        // Decode and print received frame plus bridge status bits.
         if (rx.has_value()) {
             std::cout << "cycle=" << cycle
                       << " rx_cobid=0x" << std::hex << rx->cobId << std::dec

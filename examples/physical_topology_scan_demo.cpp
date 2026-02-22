@@ -28,6 +28,7 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    // Parse transport so the same binary can target mock or physical Linux interfaces.
     std::string error;
     oec::TransportFactoryConfig transportConfig;
     if (!oec::TransportFactory::parseTransportSpec(argv[1], transportConfig, error)) {
@@ -46,6 +47,7 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    // TopologyManager provides stable snapshots + deltas over transport discovery hooks.
     oec::TopologyManager topology(*transport);
     if (!topology.refresh(error)) {
         std::cerr << "Topology scan failed: " << error << '\n';
@@ -57,6 +59,7 @@ int main(int argc, char** argv) {
     std::cout << "Discovered " << snapshot.slaves.size() << " slave(s)"
               << ", redundancy_healthy=" << (snapshot.redundancyHealthy ? "true" : "false") << '\n';
 
+    // IdentitySource shows whether vendor/product came from CoE identity or SII EEPROM fallback.
     std::cout << "Position  Online  ALState  VendorId    ProductCode  EscType  EscRev  IdentitySource\n";
     for (const auto& slave : snapshot.slaves) {
         std::cout << std::setw(8) << std::dec << slave.position << "  "

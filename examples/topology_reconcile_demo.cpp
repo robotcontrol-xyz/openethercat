@@ -49,6 +49,7 @@ void printChangeSet(const oec::TopologyChangeSet& changes) {
 } // namespace
 
 int main() {
+    // Use mock transport to deterministically script topology evolution between refresh calls.
     oec::MockTransport transport(1U, 1U);
     oec::EthercatMaster master(transport);
 
@@ -69,6 +70,7 @@ int main() {
         std::cerr << "Configure failed: " << master.lastError() << '\n';
         return 1;
     }
+    // Disable AL-state transitions: this demo isolates topology reconciliation behavior.
     auto stateOpts = oec::EthercatMaster::StateMachineOptions{};
     stateOpts.enable = false;
     master.setStateMachineOptions(stateOpts);
@@ -78,6 +80,7 @@ int main() {
     }
 
     std::string error;
+    // Baseline topology: all expected slaves online.
     transport.setDiscoveredSlaves({
         {.position = 0, .vendorId = 0x00000002, .productCode = 0x044c2c52, .online = true},
         {.position = 1, .vendorId = 0x00000002, .productCode = 0x03ec3052, .online = true},
@@ -91,6 +94,7 @@ int main() {
     }
     printChangeSet(master.topologyChangeSet());
 
+    // Changed topology: one slave offline, one removed, one hot-connected, redundancy degraded.
     transport.setDiscoveredSlaves({
         {.position = 0, .vendorId = 0x00000002, .productCode = 0x044c2c52, .online = true},
         {.position = 1, .vendorId = 0x00000002, .productCode = 0x03ec3052, .online = false},
@@ -104,6 +108,7 @@ int main() {
     }
     printChangeSet(master.topologyChangeSet());
 
+    // Compare discovered topology with configured expectation.
     const auto missing = master.missingSlaves();
     const auto hot = master.hotConnectedSlaves();
     std::cout << "missing=" << missing.size() << " hot_connected=" << hot.size() << '\n';

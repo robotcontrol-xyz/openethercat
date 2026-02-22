@@ -11,6 +11,7 @@
 #include "openethercat/transport/mock_transport.hpp"
 
 int main() {
+    // Load the same Beckhoff config used in IO demos to keep slave identities consistent.
     oec::NetworkConfiguration config;
     std::string error;
     if (!oec::ConfigurationLoader::loadFromEniAndEsiDirectory(
@@ -35,6 +36,7 @@ int main() {
         std::cout << "Cycle failed as expected: " << master.lastError() << '\n';
     }
 
+    // Diagnostic snapshots include decoded AL status and suggested recovery action.
     for (const auto& d : master.collectSlaveDiagnostics()) {
         std::cout << "slave=" << d.identity.name
                   << " position=" << d.identity.position
@@ -44,6 +46,7 @@ int main() {
                   << " action=" << oec::toString(d.suggestedAction) << '\n';
     }
 
+    // A subsequent successful cycle indicates recovery returned the network to service.
     if (master.runCycle()) {
         std::cout << "Recovery path succeeded; cycle resumed.\n";
     }

@@ -15,6 +15,7 @@
 using namespace std::chrono_literals;
 
 int main() {
+    // Reuse Beckhoff ENI/ESI so demo mirrors real signal naming and offsets.
     oec::NetworkConfiguration config;
     std::string error;
     if (!oec::ConfigurationLoader::loadFromEniAndEsiDirectory(
@@ -31,10 +32,12 @@ int main() {
         return 1;
     }
 
+    // Application-level coupling: mirror StartButton input to LampGreen output.
     master.onInputChange("StartButton", [&](bool state) {
         master.setOutputByName("LampGreen", state);
     });
 
+    // Configure a 1 ms periodic scheduler with fail-fast behavior on repeated faults.
     oec::CycleController controller;
     oec::CycleControllerOptions options;
     options.period = 1ms;
@@ -42,6 +45,7 @@ int main() {
     options.maxConsecutiveFailures = 5;
 
     controller.start(master, options, [](const oec::CycleReport& report) {
+        // Throttle reporting to avoid console noise during high-rate cycles.
         if ((report.cycleIndex % 100U) == 0U) {
             std::cout << "cycle=" << report.cycleIndex
                       << " ok=" << (report.success ? 1 : 0)
@@ -50,6 +54,7 @@ int main() {
         }
     });
 
+    // Emulate a square-wave input to exercise callback and output write paths.
     for (int i = 0; i < 1000; ++i) {
         transport.setInputBit(0, 0, (i % 200) < 100);
         std::this_thread::sleep_for(1ms);
