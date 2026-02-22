@@ -500,6 +500,16 @@ Current implementation status:
 
 Distributed clocks synchronize timing reference across slaves and master control loop.
 
+```mermaid
+flowchart LR
+    Host[Master Host Clock] --> Ctl[DC Control Loop]
+    Ref[Reference Slave DC Clock] --> Ctl
+    Ctl --> Off[DC Offset Correction]
+    Off --> Slv1[Slave 1 DC]
+    Off --> Slv2[Slave 2 DC]
+    Off --> SlvN[Slave N DC]
+```
+
 ### 8.1 What DC solves
 
 Without DC, each slave and the host scheduler run on independent clocks. Over time this creates phase drift:
@@ -509,6 +519,20 @@ Without DC, each slave and the host scheduler run on independent clocks. Over ti
 - control loops experience jitter/noise not caused by the plant.
 
 DC provides a common notion of time and lets the master align cyclic execution to that timebase.
+
+```mermaid
+sequenceDiagram
+    participant H as Host Cycle
+    participant S as Slave Sampling
+    Note over H,S: No DC
+    H->>S: Cycle k command (phase phi0)
+    H->>S: Cycle k+1 command (phase phi1 != phi0)
+    H->>S: Cycle k+2 command (phase phi2 drifts)
+    Note over H,S: With DC
+    H->>S: Cycle k command (target phase locked)
+    H->>S: Cycle k+1 command (same target phase)
+    H->>S: Cycle k+2 command (same target phase)
+```
 
 ### 8.2 Practical DC time model
 
@@ -523,6 +547,18 @@ In this stack, correction is computed from filtered phase error:
 - `e_f(k) = (1-a)*e_f(k-1) + a*e(k)` where `a = filterAlpha`
 - PI output `u(k) = Kp*e_f(k) + Ki*sum(e_f)`
 - output clamped and slew-limited before writing offset.
+
+```mermaid
+flowchart LR
+    E[Phase error e] --> F[Filter alpha]
+    F --> P[Kp path]
+    F --> I[Ki integrator]
+    P --> SUM[PI sum]
+    I --> SUM
+    SUM --> CLAMP[Clamp]
+    CLAMP --> SLEW[Slew limit]
+    SLEW --> APPLY[Applied DC correction]
+```
 
 Why clamping/slew matters:
 
@@ -547,6 +583,24 @@ Current scope note:
 - this is a practical hardware prototype path,
 - not yet a full hardware-wired Sync0/Sync1 phase-control implementation with NIC timestamp coupling.
 
+```mermaid
+sequenceDiagram
+    participant App as Application
+    participant M as EthercatMaster::runCycle
+    participant DC as DistributedClockController
+    participant T as LinuxRawSocketTransport
+    participant S as Reference Slave
+
+    App->>M: runCycle()
+    M->>T: exchange(LWR/LRD)
+    M->>T: readDcSystemTime(refSlave)
+    T->>S: APRD DC time registers
+    S-->>T: referenceTimeNs
+    M->>DC: update(referenceTimeNs, hostTimeNs)
+    DC-->>M: correctionNs
+    M->>T: writeDcSystemTimeOffset(refSlave, correctionNs)
+```
+
 ### 8.4 Closed-loop integration in `EthercatMaster`
 
 When `OEC_DC_CLOSED_LOOP=1`, each cycle can do:
@@ -560,6 +614,18 @@ When `OEC_DC_CLOSED_LOOP=1`, each cycle can do:
 
 This couples DC behavior directly to your cyclic master loop, which is where control determinism matters.
 
+```mermaid
+flowchart TD
+    Start[Cycle start] --> ReadRef[Read reference DC time]
+    ReadRef --> Measure[Get host time]
+    Measure --> Error[Phase error]
+    Error --> PI[PI controller]
+    PI --> Limits[Clamp + slew limit]
+    Limits --> Write[Write DC offset]
+    Write --> Quality[Update lock and jitter metrics]
+    Quality --> End[Cycle end]
+```
+
 ### 8.5 Sync quality supervision
 
 The stack tracks quality beyond raw correction:
@@ -570,6 +636,17 @@ The stack tracks quality beyond raw correction:
 - policy triggers (`warn`, `degrade`, `recover`).
 
 This turns DC from a black box into a measurable control subsystem.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Unlocked
+    Unlocked --> Locking: in-window samples increase
+    Locking --> Locked: acquire threshold reached
+    Locked --> OutOfWindow: error exceeds threshold
+    OutOfWindow --> Locked: recovered within grace
+    OutOfWindow --> PolicyAction: exceeds max OOW cycles
+    PolicyAction --> Locking: retry/recover path
+```
 
 ### 8.6 Tuning strategy (field-proven workflow)
 
