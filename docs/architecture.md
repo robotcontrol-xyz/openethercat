@@ -219,6 +219,7 @@ Current Linux startup mapping is hybrid:
 - FMMU entries are programmed from those SM windows to the master's logical process image.
 - Full dynamic PDO descriptor discovery (`0x1C12/0x1C13`, `0x16xx/0x1Axx`) is not yet auto-derived.
 - Optional runtime write-verification can read back SM2 process RAM and compare against commanded outputs (`OEC_TRACE_OUTPUT_VERIFY=1`).
+- Detailed remap flow and API examples are documented in `docs/ethercat-primer.md` ("3.2) PDO mapping and reconfiguration").
 
 ```mermaid
 flowchart LR

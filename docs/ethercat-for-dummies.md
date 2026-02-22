@@ -246,6 +246,96 @@ In this stack:
 - emergency frame handling during waits,
 - error class counters for KPI analysis.
 
+### 7.4 PDO mapping and PDO reconfiguration (general EtherCAT behavior)
+
+PDO mapping is defined through object dictionary entries.
+
+Typical CANopen-over-EtherCAT layout:
+
+- RxPDO mapping objects: `0x1600...`
+- TxPDO mapping objects: `0x1A00...`
+- RxPDO assignment object: `0x1C12`
+- TxPDO assignment object: `0x1C13`
+
+Mapping entry format (32-bit):
+
+- bits `15..0`: object index
+- bits `23..16`: subindex
+- bits `31..24`: bit length
+
+Standard reconfiguration pattern (conceptual):
+
+1. Move slave to a safe configuration state (typically PRE-OP/SAFE-OP context).
+2. Disable assignment count (`sub0 = 0`) for mapping object.
+3. Write mapping entries to subindices `1..N`.
+4. Write mapping object `sub0 = N`.
+5. Disable SM assignment object `sub0 = 0`.
+6. Assign mapping object index at `sub1`.
+7. Re-enable SM assignment object `sub0 = 1` (or more, if multiple PDO objects).
+8. Return to operational state and validate WKC/process data behavior.
+
+Why this order matters:
+
+- Writing mappings while assignment is active can fail or create transient inconsistency.
+- Many slaves enforce strict state and sequencing requirements.
+
+### 7.5 PDO mapping in this stack (current implementation)
+
+Public master API:
+
+- `configureRxPdo(slavePos, entries, err)`
+- `configureTxPdo(slavePos, entries, err)`
+
+`PdoMappingEntry` fields:
+
+- `index`
+- `subIndex`
+- `bitLength`
+
+Current transport behavior (`LinuxRawSocketTransport::configurePdo`):
+
+1. Writes mapping object (`0x1600` for Rx, `0x1A00` for Tx in current helper flow):
+   - set `sub0=0`,
+   - write entries (`sub1..`),
+   - set `sub0=entryCount`.
+2. Writes assignment object:
+   - Rx path uses `0x1C12`,
+   - Tx path uses `0x1C13`,
+   - set `sub0=0`, set `sub1=<mapIndex>`, set `sub0=1`.
+
+Important current scope:
+
+- Helper path uses first standard objects (`0x1600`, `0x1A00`) by default.
+- Full auto-derivation across arbitrary multi-PDO maps and vendor-specific layouts is not yet complete.
+- Some simple digital terminals do not require mailbox PDO remapping for basic cyclic IO and rely on fixed SM/FMMU process RAM mapping.
+
+### 7.6 Example: configure one RxPDO and one TxPDO
+
+```cpp
+std::string err;
+std::vector<oec::PdoMappingEntry> rx = {
+    {.index = 0x7000, .subIndex = 0x01, .bitLength = 8},
+};
+std::vector<oec::PdoMappingEntry> tx = {
+    {.index = 0x6000, .subIndex = 0x01, .bitLength = 8},
+};
+
+if (!master.configureRxPdo(2, rx, err)) {
+    // inspect err
+}
+if (!master.configureTxPdo(2, tx, err)) {
+    // inspect err
+}
+```
+
+### 7.7 Practical caution for reconfiguration
+
+- Reconfigure PDOs when the slave is not in full OP data exchange unless vendor docs explicitly allow it.
+- After PDO changes:
+  - refresh/rebuild process image mapping as needed,
+  - verify `SM2/SM3` lengths,
+  - verify `LWR/LRD` WKC and actual field IO behavior.
+
 ---
 
 ## Chapter 8: Distributed Clocks (DC) and Time Quality

@@ -109,6 +109,90 @@ flowchart TB
     EL1004["EL1004 SM3/FMMU"] --> IN
 ```
 
+## 3.2) PDO mapping and reconfiguration
+
+### General EtherCAT behavior
+
+PDO mapping is configured through CoE object dictionary entries:
+
+- RxPDO mapping objects: `0x1600...`
+- TxPDO mapping objects: `0x1A00...`
+- RxPDO assignment object: `0x1C12`
+- TxPDO assignment object: `0x1C13`
+
+Each mapping entry is a 32-bit descriptor:
+
+- bits `15..0`: object index
+- bits `23..16`: subindex
+- bits `31..24`: bit length
+
+Typical remap sequence (slave in PRE-OP or SAFE-OP):
+
+1. Disable mapping object (`sub0 = 0`).
+2. Write mapping entries (`sub1..N`).
+3. Enable mapping object (`sub0 = N`).
+4. Disable assignment object (`sub0 = 0`).
+5. Write assigned PDO object indices (`sub1..M`).
+6. Enable assignment object (`sub0 = M`).
+7. Re-validate AL state and cyclic process data WKC.
+
+```mermaid
+sequenceDiagram
+    participant M as Master
+    participant S as Slave CoE OD
+
+    M->>S: PRE-OP/SAFE-OP
+    M->>S: SDO write map sub0=0
+    M->>S: SDO write map entries (sub1..N)
+    M->>S: SDO write map sub0=N
+    M->>S: SDO write assign sub0=0
+    M->>S: SDO write assign entries (sub1..M)
+    M->>S: SDO write assign sub0=M
+    M->>S: Transition toward OP + verify WKC
+```
+
+### How this stack handles it
+
+This stack has two mapping layers:
+
+- Mailbox PDO object mapping (`0x16xx/0x1Axx`, `0x1C12/0x1C13`) via CoE SDO.
+- ESC process RAM exposure (`SM2/SM3`) to logical address space via FMMU.
+
+At startup on Linux transport:
+
+1. `EthercatMaster::start()` calls `LinuxRawSocketTransport::configureProcessImage(...)`.
+2. Transport reads `SM2`/`SM3` start + length directly from slave ESC.
+3. Transport programs FMMU windows from those SM regions into the master process image.
+
+For explicit PDO reconfiguration, the master API exposes:
+
+- `EthercatMaster::configureRxPdo(...)`
+- `EthercatMaster::configureTxPdo(...)`
+
+Those helpers currently target standard first PDO map objects (`0x1600`, `0x1A00`) and assignment objects (`0x1C12`, `0x1C13`).
+
+```cpp
+std::string err;
+std::vector<oec::PdoMappingEntry> rx = {
+    {.index = 0x7000, .subIndex = 0x01, .bitLength = 8},
+};
+std::vector<oec::PdoMappingEntry> tx = {
+    {.index = 0x6000, .subIndex = 0x01, .bitLength = 8},
+};
+
+if (!master.configureRxPdo(2, rx, err)) {
+    throw std::runtime_error(err);
+}
+if (!master.configureTxPdo(1, tx, err)) {
+    throw std::runtime_error(err);
+}
+```
+
+Important scope note:
+
+- Simple I/O terminals often run with fixed/default mapping and may not need mailbox PDO remapping for basic cyclic use.
+- Full automatic multi-PDO derivation for arbitrary vendor layouts remains a hardening item.
+
 ## 4) How to interpret WKC in this implementation
 
 This stack uses split cyclic datagrams:
