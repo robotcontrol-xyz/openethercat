@@ -245,6 +245,15 @@ Mailbox robustness behavior in current Linux transport:
 - `poll` mode skips status-bit gating and relies on mailbox polling cadence.
 - Mailbox diagnostics include error-class counters (`timeout`, `busy`, `parse`, `stale_counter`, `abort`, `transport_io`, `unknown`) for KPI analysis.
 - Mailbox diagnostics output includes `schema_version` for stable machine parsing across CI/report pipelines.
+- Current schema version is `2`, adding FoE/EoE protocol counters:
+  `foe_read_started`, `foe_read_failed`, `foe_write_started`, `foe_write_failed`,
+  `eoe_send_started`, `eoe_send_failed`, `eoe_receive_started`, `eoe_receive_failed`.
+
+Example (`OEC_SOAK_JSON=1`):
+
+```json
+{"type":"mailbox_diag","schema_version":2,"tx_started":1000,"tx_failed":2,"foe_read_started":0,"foe_read_failed":0,"foe_write_started":0,"foe_write_failed":0,"eoe_send_started":0,"eoe_send_failed":0,"eoe_receive_started":0,"eoe_receive_failed":0}
+```
 
 Typical command:
 

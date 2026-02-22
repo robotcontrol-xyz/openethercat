@@ -113,6 +113,19 @@ OEC_TRACE_DC_QUALITY=1 OEC_DC_QUALITY_JSON=1 OEC_TRACE_CYCLE_EVERY=100 \
   sudo ./build/beckhoff_io_demo linux:eth0
 ```
 
+`mailbox_soak_demo` mailbox diagnostics use schema `2` and include protocol-specific counters for FoE/EoE traffic:
+
+- `foe_read_started`, `foe_read_failed`
+- `foe_write_started`, `foe_write_failed`
+- `eoe_send_started`, `eoe_send_failed`
+- `eoe_receive_started`, `eoe_receive_failed`
+
+Example JSON diagnostics line:
+
+```json
+{"type":"mailbox_diag","schema_version":2,"tx_started":1000,"tx_failed":2,"foe_read_started":0,"foe_read_failed":0,"foe_write_started":0,"foe_write_failed":0,"eoe_send_started":0,"eoe_send_failed":0,"eoe_receive_started":0,"eoe_receive_failed":0}
+```
+
 The demo uses `MockTransport` so it runs without root and without EtherCAT hardware.
 The demo loads configuration from:
 - `examples/config/beckhoff_demo.eni.xml`

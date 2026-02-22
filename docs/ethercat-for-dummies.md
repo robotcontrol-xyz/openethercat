@@ -340,6 +340,9 @@ Useful runtime knobs:
 Telemetry/KPI path:
 
 - `mailbox_soak_demo` prints mailbox diagnostics counters and supports JSON lines (`OEC_SOAK_JSON=1`) for long-run analysis.
+- Mailbox diagnostics schema is currently `2`, including FoE/EoE counters:
+  `foe_read_started`, `foe_read_failed`, `foe_write_started`, `foe_write_failed`,
+  `eoe_send_started`, `eoe_send_failed`, `eoe_receive_started`, `eoe_receive_failed`.
 
 ### 7.4 PDO mapping and PDO reconfiguration (general EtherCAT behavior)
 
