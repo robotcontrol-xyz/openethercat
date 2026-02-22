@@ -61,13 +61,13 @@ if(OEC_BUILD_EXAMPLES)
     add_executable(linux_raw_socket_cycle_demo examples/linux_raw_socket_cycle_demo.cpp)
     target_link_libraries(linux_raw_socket_cycle_demo PRIVATE openethercat)
 
-    add_executable(recovery_diagnostics_demo examples/recovery_diagnostics_demo.cpp)
+    add_executable(recovery_diagnostics_demo diagnostics/recovery_diagnostics_demo.cpp)
     target_link_libraries(recovery_diagnostics_demo PRIVATE openethercat)
 
     add_executable(recovery_profile_demo examples/recovery_profile_demo.cpp)
     target_link_libraries(recovery_profile_demo PRIVATE openethercat)
 
-    add_executable(coe_dc_topology_demo examples/coe_dc_topology_demo.cpp)
+    add_executable(coe_dc_topology_demo diagnostics/coe_dc_topology_demo.cpp)
     target_link_libraries(coe_dc_topology_demo PRIVATE openethercat)
 
     add_executable(mock_hil_soak examples/mock_hil_soak.cpp)
@@ -88,23 +88,26 @@ if(OEC_BUILD_EXAMPLES)
     add_executable(el6751_can_bridge_demo examples/el6751_can_bridge_demo.cpp)
     target_link_libraries(el6751_can_bridge_demo PRIVATE openethercat)
 
-    add_executable(physical_topology_scan_demo examples/physical_topology_scan_demo.cpp)
+    add_executable(physical_topology_scan_demo diagnostics/physical_topology_scan_demo.cpp)
     target_link_libraries(physical_topology_scan_demo PRIVATE openethercat)
 
-    add_executable(topology_reconcile_demo examples/topology_reconcile_demo.cpp)
+    add_executable(topology_reconcile_demo diagnostics/topology_reconcile_demo.cpp)
     target_link_libraries(topology_reconcile_demo PRIVATE openethercat)
 
-    add_executable(redundancy_fault_sequence_demo examples/redundancy_fault_sequence_demo.cpp)
+    add_executable(redundancy_fault_sequence_demo diagnostics/redundancy_fault_sequence_demo.cpp)
     target_link_libraries(redundancy_fault_sequence_demo PRIVATE openethercat)
 
-    add_executable(mailbox_soak_demo examples/mailbox_soak_demo.cpp)
+    add_executable(mailbox_soak_demo diagnostics/mailbox_soak_demo.cpp)
     target_link_libraries(mailbox_soak_demo PRIVATE openethercat)
 
-    add_executable(dc_hardware_sync_demo examples/dc_hardware_sync_demo.cpp)
+    add_executable(dc_hardware_sync_demo diagnostics/dc_hardware_sync_demo.cpp)
     target_link_libraries(dc_hardware_sync_demo PRIVATE openethercat)
 
-    add_executable(dc_soak_demo examples/dc_soak_demo.cpp)
+    add_executable(dc_soak_demo diagnostics/dc_soak_demo.cpp)
     target_link_libraries(dc_soak_demo PRIVATE openethercat)
+
+    add_executable(topology_to_eni_dump diagnostics/topology_to_eni_dump.cpp)
+    target_link_libraries(topology_to_eni_dump PRIVATE openethercat)
 endif()
 
 if(OEC_BUILD_TESTS)

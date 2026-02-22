@@ -85,6 +85,7 @@ Artifacts are emitted in `build/` as `.deb` files, one for each component.
 ./build/mailbox_soak_demo linux:eth0 1 0x1018 0x01 1000
 ./build/dc_hardware_sync_demo linux:eth0 1 500 10
 ./build/dc_soak_demo linux:eth0 600 1000
+./build/topology_to_eni_dump linux:eth0 generated_discovery.eni.xml 1 1
 # JSON-lines mode for CI ingestion:
 OEC_SOAK_JSON=1 ./build/mailbox_soak_demo linux:eth0 1 0x1018 0x01 1000
 # DC demo JSON mode + safe correction limits:
@@ -117,6 +118,10 @@ The demo loads configuration from:
 - `examples/config/beckhoff_devices.xml`
 - `examples/config/recovery_profile.json` (for recovery profile demo)
 
+Project layout:
+- `examples/`: application-style usage demos (I/O, motion, bridge patterns).
+- `diagnostics/`: discovery/soak/fault-injection/observability tools.
+
 ### ENI/ESI relationship in this stack
 
 `beckhoff_demo.eni.xml` and `beckhoff_devices.xml` have different roles:
@@ -143,6 +148,25 @@ Practical implication:
 - Edit ENI when you change actual mapped topology/signals.
 - Expand ESI catalog when you want better identity coverage for more device names.
 - ESI does not override signal byte/bit mapping from ENI.
+
+### Topology scan to ENI generator
+
+Use `topology_to_eni_dump` to discover the current bus and generate a starter ENI file:
+
+```bash
+sudo ./build/topology_to_eni_dump linux:eth0 generated_discovery.eni.xml 1 1
+```
+
+Arguments:
+- `transport-spec`
+- `output-eni` (default: `generated_discovery.eni.xml`)
+- `fallback-input-bytes` (default: `1`)
+- `fallback-output-bytes` (default: `1`)
+
+The generated ENI includes:
+- discovered `<Slave .../>` entries,
+- auto-generated `<Signal .../>` entries for known Beckhoff digital I/O product codes,
+- a loader-compatible placeholder signal if no known mapping rule matches.
 
 Real NIC demo (requires root and EtherCAT interface):
 

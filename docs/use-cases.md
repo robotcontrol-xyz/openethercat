@@ -71,7 +71,7 @@ flowchart TD
 ```
 
 Reference examples:
-- `examples/recovery_diagnostics_demo.cpp`
+- `diagnostics/recovery_diagnostics_demo.cpp`
 - `examples/recovery_profile_demo.cpp`
 
 Class responsibility mapping:
@@ -99,7 +99,7 @@ flowchart TB
     Master --> Cycle[Cyclic exchange]
 ```
 
-Reference example: `examples/coe_dc_topology_demo.cpp`.
+Reference example: `diagnostics/coe_dc_topology_demo.cpp`.
 
 Class responsibility mapping:
 - `TopologyManager`: discovers online slaves and redundancy state.
@@ -137,7 +137,7 @@ sequenceDiagram
     TM-->>App: snapshot()
 ```
 
-Reference example: `examples/physical_topology_scan_demo.cpp`.
+Reference example: `diagnostics/physical_topology_scan_demo.cpp`.
 
 Class responsibility mapping:
 - `TransportFactory`: creates Linux transport from CLI transport spec.
@@ -155,6 +155,26 @@ topology.refresh(error);
 const auto snap = topology.snapshot();
 transport->close();
 ```
+
+## 4.1) Generate starter ENI from discovered topology
+
+Reference tool: `diagnostics/topology_to_eni_dump.cpp`.
+
+Purpose:
+- discover the current bus topology from transport scan,
+- emit an ENI XML skeleton with discovered slave identities,
+- auto-generate basic signal mappings for known Beckhoff digital I/O product codes.
+
+Example:
+
+```bash
+sudo ./build/topology_to_eni_dump linux:eth0 generated_discovery.eni.xml 1 1
+```
+
+Notes:
+- generated mapping is best-effort and should be reviewed before production use,
+- unknown product codes are still emitted as slave entries,
+- if no mapping rule matches, a placeholder signal is emitted so the file remains loader-compatible.
 
 ## 5) Long-run HIL-style campaign
 
@@ -279,7 +299,7 @@ sequenceDiagram
     M->>M: RedundancyDegraded -> Recovering -> RedundantHealthy
 ```
 
-Reference example: `examples/redundancy_fault_sequence_demo.cpp`.
+Reference example: `diagnostics/redundancy_fault_sequence_demo.cpp`.
 
 Class responsibility mapping:
 - `EthercatMaster`: state transition timeline + KPI accumulation.
