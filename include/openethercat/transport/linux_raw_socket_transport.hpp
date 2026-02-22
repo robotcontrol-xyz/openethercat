@@ -20,6 +20,7 @@ namespace oec {
  * @brief Mailbox-path diagnostics counters for LinuxRawSocketTransport.
  */
 struct MailboxDiagnostics {
+    std::uint32_t schemaVersion = 1;
     std::uint64_t transactionsStarted = 0;
     std::uint64_t transactionsFailed = 0;
     std::uint64_t mailboxWrites = 0;

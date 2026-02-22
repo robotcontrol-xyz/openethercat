@@ -155,6 +155,7 @@ Mailbox robustness behavior in current Linux transport:
 - `strict` mode enforces SM status availability/readiness before mailbox transfer.
 - `poll` mode skips status-bit gating and relies on mailbox polling cadence.
 - Mailbox diagnostics include error-class counters (`timeout`, `busy`, `parse`, `stale_counter`, `abort`, `transport_io`, `unknown`) for KPI analysis.
+- Mailbox diagnostics output includes `schema_version` for stable machine parsing across CI/report pipelines.
 
 Typical command:
 

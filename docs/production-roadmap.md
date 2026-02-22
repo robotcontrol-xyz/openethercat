@@ -24,7 +24,7 @@ All criteria below must pass:
 
 ## Phase 1: Core protocol hardening (Mailbox + observability)
 
-Status: In progress (major parts implemented).
+Status: Complete.
 
 ### Scope
 
@@ -34,12 +34,6 @@ Status: In progress (major parts implemented).
 - Retry/backoff policy.
 - Emergency queue integration.
 - Mailbox diagnostics counters + soak tooling.
-
-### Remaining work in phase
-
-1. Add bounded emergency queue policy + overflow counters.
-2. Add mailbox timeout/error taxonomy enums and wire to diagnostics output.
-3. Add automated regression tests for retry exhaustion and timeout classification.
 
 ### Deliverables
 
@@ -166,4 +160,3 @@ Suggested risk labels:
 - `R2` medium
 - `R3` high
 - `R4` release-blocking
-

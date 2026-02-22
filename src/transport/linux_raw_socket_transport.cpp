@@ -742,7 +742,8 @@ bool LinuxRawSocketTransport::sdoUpload(std::uint16_t slavePosition, const SdoAd
         return false;
     };
 
-    if (socketFd_ < 0) {
+    const bool forceTimeoutTest = (std::getenv("OEC_MAILBOX_TEST_FORCE_TIMEOUT") != nullptr);
+    if (socketFd_ < 0 && !forceTimeoutTest) {
         outError = "transport not open";
         setTxErrorClass(MailboxErrorClass::TransportIo);
         return fail();
@@ -787,7 +788,26 @@ bool LinuxRawSocketTransport::sdoUpload(std::uint16_t slavePosition, const SdoAd
     auto datagramWithRetry = [&](const EthercatDatagramRequest& req,
                                  std::uint16_t& outWkc,
                                  std::vector<std::uint8_t>& outPayload) -> bool {
+        (void)req;
+        (void)outWkc;
+        (void)outPayload;
         std::string firstError;
+        if (forceTimeoutTest) {
+            for (int attempt = 0; attempt <= mailboxRetries; ++attempt) {
+                const std::string localError = "Timed out waiting for CoE mailbox response";
+                if (firstError.empty()) {
+                    firstError = localError;
+                }
+                if (attempt == mailboxRetries) {
+                    outError = localError;
+                    ++mailboxDiagnostics_.mailboxTimeouts;
+                    setTxErrorClass(MailboxErrorClass::Timeout);
+                    return false;
+                }
+                ++mailboxDiagnostics_.datagramRetries;
+                sleepMailboxBackoff(attempt, mailboxBackoffBaseMs, mailboxBackoffMaxMs);
+            }
+        }
         for (int attempt = 0; attempt <= mailboxRetries; ++attempt) {
             std::string localError;
             if (sendAndReceiveDatagram(socketFd_, ifIndex_, timeoutMs_, maxFramesPerCycle_,
@@ -1135,7 +1155,8 @@ bool LinuxRawSocketTransport::sdoDownload(std::uint16_t slavePosition, const Sdo
         return false;
     };
 
-    if (socketFd_ < 0) {
+    const bool forceTimeoutTest = (std::getenv("OEC_MAILBOX_TEST_FORCE_TIMEOUT") != nullptr);
+    if (socketFd_ < 0 && !forceTimeoutTest) {
         outError = "transport not open";
         setTxErrorClass(MailboxErrorClass::TransportIo);
         return fail();
@@ -1180,7 +1201,26 @@ bool LinuxRawSocketTransport::sdoDownload(std::uint16_t slavePosition, const Sdo
     auto datagramWithRetry = [&](const EthercatDatagramRequest& req,
                                  std::uint16_t& outWkc,
                                  std::vector<std::uint8_t>& outPayload) -> bool {
+        (void)req;
+        (void)outWkc;
+        (void)outPayload;
         std::string firstError;
+        if (forceTimeoutTest) {
+            for (int attempt = 0; attempt <= mailboxRetries; ++attempt) {
+                const std::string localError = "Timed out waiting for CoE mailbox response";
+                if (firstError.empty()) {
+                    firstError = localError;
+                }
+                if (attempt == mailboxRetries) {
+                    outError = localError;
+                    ++mailboxDiagnostics_.mailboxTimeouts;
+                    setTxErrorClass(MailboxErrorClass::Timeout);
+                    return false;
+                }
+                ++mailboxDiagnostics_.datagramRetries;
+                sleepMailboxBackoff(attempt, mailboxBackoffBaseMs, mailboxBackoffMaxMs);
+            }
+        }
         for (int attempt = 0; attempt <= mailboxRetries; ++attempt) {
             std::string localError;
             if (sendAndReceiveDatagram(socketFd_, ifIndex_, timeoutMs_, maxFramesPerCycle_,

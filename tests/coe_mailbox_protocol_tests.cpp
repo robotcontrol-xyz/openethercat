@@ -4,6 +4,7 @@
  */
 
 #include <cassert>
+#include <cstdlib>
 #include <cstdint>
 #include <iostream>
 #include <queue>
@@ -186,6 +187,31 @@ int main() {
                oec::MailboxErrorClass::Abort);
         assert(oec::LinuxRawSocketTransport::classifyMailboxError("transport not open") ==
                oec::MailboxErrorClass::TransportIo);
+    }
+
+    // Deterministic retry exhaustion + timeout classification path for mailbox transaction.
+    {
+        ::setenv("OEC_MAILBOX_TEST_FORCE_TIMEOUT", "1", 1);
+        ::setenv("OEC_MAILBOX_RETRIES", "3", 1);
+        oec::LinuxRawSocketTransport transport("eth0");
+        transport.resetMailboxDiagnostics();
+
+        std::vector<std::uint8_t> data;
+        std::uint32_t abortCode = 0U;
+        std::string error;
+        const bool ok = transport.sdoUpload(1, {.index = 0x1018, .subIndex = 0x01}, data, abortCode, error);
+        assert(!ok);
+        assert(transport.lastMailboxErrorClass() == oec::MailboxErrorClass::Timeout);
+        const auto d = transport.mailboxDiagnostics();
+        assert(d.schemaVersion == 1U);
+        assert(d.transactionsStarted == 1U);
+        assert(d.transactionsFailed == 1U);
+        assert(d.errorTimeout >= 1U);
+        assert(d.datagramRetries >= 3U);
+        assert(d.mailboxTimeouts >= 1U);
+
+        ::unsetenv("OEC_MAILBOX_TEST_FORCE_TIMEOUT");
+        ::unsetenv("OEC_MAILBOX_RETRIES");
     }
 
     std::cout << "coe_mailbox_protocol_tests passed\n";

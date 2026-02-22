@@ -196,6 +196,7 @@ int main(int argc, char** argv) {
             const auto d = linux->mailboxDiagnostics();
             if (jsonMode) {
                 std::cout << "{\"type\":\"mailbox_diag\""
+                          << ",\"schema_version\":" << d.schemaVersion
                           << ",\"tx_started\":" << d.transactionsStarted
                           << ",\"tx_failed\":" << d.transactionsFailed
                           << ",\"writes\":" << d.mailboxWrites
@@ -217,6 +218,7 @@ int main(int argc, char** argv) {
                           << "}\n";
             } else {
                 std::cout << "mailbox_diag"
+                          << " schema_version=" << d.schemaVersion
                           << " tx_started=" << d.transactionsStarted
                           << " tx_failed=" << d.transactionsFailed
                           << " writes=" << d.mailboxWrites
