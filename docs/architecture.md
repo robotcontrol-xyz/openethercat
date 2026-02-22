@@ -37,6 +37,9 @@ flowchart TB
 - `runCycle()`: performs cyclic process-data exchange and callback dispatch.
 - `onInputChange(...)` and `setOutputByName(...)`: app-level logical signal API.
 - `collectSlaveDiagnostics()` and recovery APIs: production monitoring and remediation.
+- `refreshTopology()` + `topologyChangeSet()` + `topologyGeneration()`: deterministic topology reconciliation.
+- `setTopologyRecoveryOptions(...)`: policy configuration for missing/hot-connect/redundancy events.
+- `redundancyStatus()` + `redundancyKpis()` + `redundancyTransitions()`: switchover observability and timeline analytics.
 
 ### `oec::ITransport` (abstraction)
 - Role: hardware/wire access contract.
@@ -106,6 +109,12 @@ classDiagram
       +runCycle() bool
       +stop() void
       +refreshTopology(string&) bool
+      +topologyChangeSet() TopologyChangeSet
+      +topologyGeneration() uint64_t
+      +setTopologyRecoveryOptions(TopologyRecoveryOptions) void
+      +redundancyStatus() RedundancyStatusSnapshot
+      +redundancyKpis() RedundancyKpiSnapshot
+      +redundancyTransitions() vector~RedundancyTransitionEvent~
       +updateDistributedClock(int64,int64) optional<int64>
     }
 
@@ -320,4 +329,47 @@ const auto rd = master.sdoUpload(2, {.index = 0x2000, .subIndex = 1});
 if (!wr.success || !rd.success) {
     // wr.error / rd.error
 }
+```
+
+### 5) Topology reconciliation + redundancy API usage
+
+```cpp
+std::string topoErr;
+if (master.refreshTopology(topoErr)) {
+    const auto delta = master.topologyChangeSet();
+    const auto generation = master.topologyGeneration();
+    const auto missing = master.missingSlaves();
+    const auto hot = master.hotConnectedSlaves();
+
+    const auto rs = master.redundancyStatus();
+    const auto rk = master.redundancyKpis();
+    const auto timeline = master.redundancyTransitions();
+    (void)delta; (void)generation; (void)missing; (void)hot;
+    (void)rs; (void)rk; (void)timeline;
+}
+```
+
+### 6) Configure topology recovery policy from app code
+
+```cpp
+oec::EthercatMaster::TopologyRecoveryOptions topo;
+topo.enable = true;
+topo.missingGraceCycles = 2;
+topo.hotConnectGraceCycles = 2;
+topo.redundancyGraceCycles = 2;
+topo.missingSlaveAction = oec::EthercatMaster::TopologyPolicyAction::Degrade;
+topo.hotConnectAction = oec::EthercatMaster::TopologyPolicyAction::Monitor;
+topo.redundancyAction = oec::EthercatMaster::TopologyPolicyAction::Degrade;
+master.setTopologyRecoveryOptions(topo);
+```
+
+## Redundancy Transition States
+
+```mermaid
+stateDiagram-v2
+    [*] --> PrimaryOnly
+    PrimaryOnly --> RedundantHealthy: topology healthy
+    RedundantHealthy --> RedundancyDegraded: fault detected
+    RedundancyDegraded --> Recovering: link restored
+    Recovering --> RedundantHealthy: stabilized
 ```

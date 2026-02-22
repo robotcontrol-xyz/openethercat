@@ -230,3 +230,41 @@ Debug visibility knobs:
 - `OEC_TRACE_DC=1`: emit per-cycle DC trace from master closed-loop path (`ref_ns`, `host_ns`, `phase_err_ns`, raw/applied correction, lock transition).
 - `OEC_TRACE_DC_QUALITY=1`: emit periodic DC quality snapshots in `beckhoff_io_demo`.
 - `OEC_DC_QUALITY_JSON=1`: format `beckhoff_io_demo` DC quality snapshots as JSON lines.
+
+## 10) Topology and redundancy policy terms
+
+Additional runtime terms used in phase-3 tooling:
+
+| Term | Meaning | API/Trace context |
+|---|---|---|
+| `TopologyChangeSet` | Delta between previous and current discovered topology. | `topologyChangeSet()` |
+| `generation` | Monotonic topology refresh version. | `topologyGeneration()` and redundancy transition events |
+| `hot-connected` | Online slave that is not in configured expected list. | `hotConnectedSlaves()` |
+| `missing` | Configured expected slave that is not currently online. | `missingSlaves()` |
+| `RedundancyDegraded` | Redundancy line/path fault detected. | `redundancyStatus().state` |
+| `Recovering` | Redundancy link restored and stabilization in progress. | `redundancyStatus().state` |
+| `impactedCycles` | Cycles executed while degraded or recovering. | `redundancyKpis()` |
+
+Topology policy env knobs:
+
+- `OEC_TOPOLOGY_POLICY_ENABLE=1`
+- `OEC_TOPOLOGY_MISSING_GRACE=<cycles>`
+- `OEC_TOPOLOGY_HOTCONNECT_GRACE=<cycles>`
+- `OEC_TOPOLOGY_REDUNDANCY_GRACE=<cycles>`
+- `OEC_TOPOLOGY_MISSING_ACTION=monitor|retry|reconfigure|degrade|failstop`
+- `OEC_TOPOLOGY_HOTCONNECT_ACTION=monitor|retry|reconfigure|degrade|failstop`
+- `OEC_TOPOLOGY_REDUNDANCY_ACTION=monitor|retry|reconfigure|degrade|failstop`
+- `OEC_TOPOLOGY_REDUNDANCY_HISTORY=<N>`: bounded transition timeline history.
+
+API snippet:
+
+```cpp
+std::string err;
+if (master.refreshTopology(err)) {
+    const auto cs = master.topologyChangeSet();
+    const auto rs = master.redundancyStatus();
+    const auto rk = master.redundancyKpis();
+    const auto transitions = master.redundancyTransitions();
+    (void)cs; (void)rs; (void)rk; (void)transitions;
+}
+```

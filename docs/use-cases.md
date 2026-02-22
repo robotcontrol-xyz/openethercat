@@ -110,6 +110,10 @@ Class responsibility mapping:
 std::string topoErr;
 if (master.refreshTopology(topoErr)) {
     const auto snap = master.topologySnapshot();
+    const auto delta = master.topologyChangeSet();
+    const auto rs = master.redundancyStatus();
+    const auto rk = master.redundancyKpis();
+    (void)delta; (void)rs; (void)rk;
 }
 const auto corr = master.updateDistributedClock(refNs, localNs);
 const auto sdo = master.sdoUpload(2, {.index = 0x2000, .subIndex = 1});
@@ -257,4 +261,40 @@ if (!oec::TransportFactory::parseTransportSpec(spec, tc, err)) {
     // invalid format
 }
 auto transport = oec::TransportFactory::create(tc, err);
+```
+
+## 9) Redundancy fault-sequence campaign
+
+```mermaid
+sequenceDiagram
+    participant App
+    participant M as EthercatMaster
+    participant T as Mock/Linux Transport
+
+    App->>T: setRedundancyHealthy(false)
+    App->>M: refreshTopology()
+    M->>M: RedundantHealthy -> RedundancyDegraded
+    App->>T: setRedundancyHealthy(true)
+    App->>M: refreshTopology()
+    M->>M: RedundancyDegraded -> Recovering -> RedundantHealthy
+```
+
+Reference example: `examples/redundancy_fault_sequence_demo.cpp`.
+
+Class responsibility mapping:
+- `EthercatMaster`: state transition timeline + KPI accumulation.
+- Topology recovery policy: grace-cycle action triggering and latching.
+- Transport: fault injection (`redundancyHealthy`) and discovery snapshot.
+
+```cpp
+oec::EthercatMaster::TopologyRecoveryOptions opts;
+opts.enable = true;
+opts.redundancyGraceCycles = 2;
+opts.redundancyAction = oec::EthercatMaster::TopologyPolicyAction::Degrade;
+master.setTopologyRecoveryOptions(opts);
+
+std::string err;
+master.refreshTopology(err);
+const auto timeline = master.redundancyTransitions();
+const auto kpi = master.redundancyKpis();
 ```
