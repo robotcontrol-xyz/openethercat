@@ -102,6 +102,7 @@ int main(int argc, char** argv) {
             static_cast<std::uint8_t>((argc > 4) ? parseUnsigned(argv[4], "subindex") : 0x01U);
         const std::size_t cycles =
             static_cast<std::size_t>((argc > 5) ? parseUnsigned(argv[5], "cycles") : 1000U);
+        const bool jsonMode = (std::getenv("OEC_SOAK_JSON") != nullptr);
 
         oec::TransportFactoryConfig config;
         std::string error;
@@ -122,8 +123,13 @@ int main(int argc, char** argv) {
         auto* linux = dynamic_cast<oec::LinuxRawSocketTransport*>(transport.get());
         if (linux) {
             linux->resetMailboxDiagnostics();
-            std::cout << "mailbox_status_mode=" << toModeName(linux->mailboxStatusMode()) << '\n';
-            std::cout << "mailbox_emergency_queue_limit=" << linux->emergencyQueueLimit() << '\n';
+            if (jsonMode) {
+                std::cout << "{\"type\":\"start\",\"mailbox_status_mode\":\"" << toModeName(linux->mailboxStatusMode())
+                          << "\",\"mailbox_emergency_queue_limit\":" << linux->emergencyQueueLimit() << "}\n";
+            } else {
+                std::cout << "mailbox_status_mode=" << toModeName(linux->mailboxStatusMode()) << '\n';
+                std::cout << "mailbox_emergency_queue_limit=" << linux->emergencyQueueLimit() << '\n';
+            }
         }
 
         const oec::SdoAddress address{.index = index, .subIndex = subIndex};
@@ -147,10 +153,17 @@ int main(int argc, char** argv) {
             } else {
                 ++failed;
                 if (failed <= 5U) {
-                    std::cerr << "SDO failure cycle " << i
-                              << " abort=0x" << std::hex << abortCode << std::dec
-                              << " class=" << (linux ? toErrorClassName(linux->lastMailboxErrorClass()) : "n/a")
-                              << " error=" << sdoError << '\n';
+                    if (jsonMode) {
+                        std::cerr << "{\"type\":\"failure\",\"cycle\":" << i
+                                  << ",\"abort\":\"0x" << std::hex << abortCode << std::dec
+                                  << "\",\"class\":\"" << (linux ? toErrorClassName(linux->lastMailboxErrorClass()) : "n/a")
+                                  << "\",\"error\":\"" << sdoError << "\"}\n";
+                    } else {
+                        std::cerr << "SDO failure cycle " << i
+                                  << " abort=0x" << std::hex << abortCode << std::dec
+                                  << " class=" << (linux ? toErrorClassName(linux->lastMailboxErrorClass()) : "n/a")
+                                  << " error=" << sdoError << '\n';
+                    }
                 }
             }
 
@@ -158,38 +171,72 @@ int main(int argc, char** argv) {
                 const double p50 = percentile(latenciesUs, 50.0);
                 const double p95 = percentile(latenciesUs, 95.0);
                 const double p99 = percentile(latenciesUs, 99.0);
-                std::cout << "progress=" << (i + 1U) << "/" << cycles
-                          << " success=" << success
-                          << " failed=" << failed
-                          << " p50_us=" << std::fixed << std::setprecision(1) << p50
-                          << " p95_us=" << p95
-                          << " p99_us=" << p99
-                          << '\n';
+                if (jsonMode) {
+                    std::cout << "{\"type\":\"progress\",\"done\":" << (i + 1U)
+                              << ",\"total\":" << cycles
+                              << ",\"success\":" << success
+                              << ",\"failed\":" << failed
+                              << ",\"p50_us\":" << std::fixed << std::setprecision(1) << p50
+                              << ",\"p95_us\":" << p95
+                              << ",\"p99_us\":" << p99
+                              << "}\n";
+                } else {
+                    std::cout << "progress=" << (i + 1U) << "/" << cycles
+                              << " success=" << success
+                              << " failed=" << failed
+                              << " p50_us=" << std::fixed << std::setprecision(1) << p50
+                              << " p95_us=" << p95
+                              << " p99_us=" << p99
+                              << '\n';
+                }
             }
         }
 
         if (linux) {
             const auto d = linux->mailboxDiagnostics();
-            std::cout << "mailbox_diag"
-                      << " tx_started=" << d.transactionsStarted
-                      << " tx_failed=" << d.transactionsFailed
-                      << " writes=" << d.mailboxWrites
-                      << " reads=" << d.mailboxReads
-                      << " retries=" << d.datagramRetries
-                      << " timeouts=" << d.mailboxTimeouts
-                      << " stale_drop=" << d.staleCounterDrops
-                      << " parse_reject=" << d.parseRejects
-                      << " emergencies=" << d.emergencyQueued
-                      << " emergencies_dropped=" << d.emergencyDropped
-                      << " matched=" << d.matchedResponses
-                      << " err_timeout=" << d.errorTimeout
-                      << " err_busy=" << d.errorBusy
-                      << " err_parse=" << d.errorParseReject
-                      << " err_stale=" << d.errorStaleCounter
-                      << " err_abort=" << d.errorAbort
-                      << " err_io=" << d.errorTransportIo
-                      << " err_unknown=" << d.errorUnknown
-                      << '\n';
+            if (jsonMode) {
+                std::cout << "{\"type\":\"mailbox_diag\""
+                          << ",\"tx_started\":" << d.transactionsStarted
+                          << ",\"tx_failed\":" << d.transactionsFailed
+                          << ",\"writes\":" << d.mailboxWrites
+                          << ",\"reads\":" << d.mailboxReads
+                          << ",\"retries\":" << d.datagramRetries
+                          << ",\"timeouts\":" << d.mailboxTimeouts
+                          << ",\"stale_drop\":" << d.staleCounterDrops
+                          << ",\"parse_reject\":" << d.parseRejects
+                          << ",\"emergencies\":" << d.emergencyQueued
+                          << ",\"emergencies_dropped\":" << d.emergencyDropped
+                          << ",\"matched\":" << d.matchedResponses
+                          << ",\"err_timeout\":" << d.errorTimeout
+                          << ",\"err_busy\":" << d.errorBusy
+                          << ",\"err_parse\":" << d.errorParseReject
+                          << ",\"err_stale\":" << d.errorStaleCounter
+                          << ",\"err_abort\":" << d.errorAbort
+                          << ",\"err_io\":" << d.errorTransportIo
+                          << ",\"err_unknown\":" << d.errorUnknown
+                          << "}\n";
+            } else {
+                std::cout << "mailbox_diag"
+                          << " tx_started=" << d.transactionsStarted
+                          << " tx_failed=" << d.transactionsFailed
+                          << " writes=" << d.mailboxWrites
+                          << " reads=" << d.mailboxReads
+                          << " retries=" << d.datagramRetries
+                          << " timeouts=" << d.mailboxTimeouts
+                          << " stale_drop=" << d.staleCounterDrops
+                          << " parse_reject=" << d.parseRejects
+                          << " emergencies=" << d.emergencyQueued
+                          << " emergencies_dropped=" << d.emergencyDropped
+                          << " matched=" << d.matchedResponses
+                          << " err_timeout=" << d.errorTimeout
+                          << " err_busy=" << d.errorBusy
+                          << " err_parse=" << d.errorParseReject
+                          << " err_stale=" << d.errorStaleCounter
+                          << " err_abort=" << d.errorAbort
+                          << " err_io=" << d.errorTransportIo
+                          << " err_unknown=" << d.errorUnknown
+                          << '\n';
+            }
         }
 
         transport->close();

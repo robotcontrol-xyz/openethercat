@@ -145,6 +145,7 @@ Use these environment variables when running Linux transport examples:
 - `OEC_MAILBOX_BACKOFF_MAX_MS=<ms>`: cap for mailbox retry backoff (default `20` ms).
 - `OEC_MAILBOX_STATUS_MODE=strict|hybrid|poll`: mailbox status-bit handling mode (default `hybrid`).
 - `OEC_MAILBOX_EMERGENCY_QUEUE_LIMIT=<N>`: maximum queued CoE emergency messages before oldest-drop (default `256`).
+- `OEC_SOAK_JSON=1`: for `mailbox_soak_demo`, emits JSON-lines progress/diagnostics suitable for CI KPI ingestion.
 
 Mailbox robustness behavior in current Linux transport:
 

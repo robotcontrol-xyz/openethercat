@@ -80,6 +80,8 @@ Artifacts are emitted in `build/` as `.deb` files, one for each component.
 ./build/el6751_can_bridge_demo
 ./build/physical_topology_scan_demo linux:eth0
 ./build/mailbox_soak_demo linux:eth0 1 0x1018 0x01 1000
+# JSON-lines mode for CI ingestion:
+OEC_SOAK_JSON=1 ./build/mailbox_soak_demo linux:eth0 1 0x1018 0x01 1000
 ```
 
 The demo uses `MockTransport` so it runs without root and without EtherCAT hardware.
