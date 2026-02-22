@@ -215,3 +215,12 @@ For optional in-master closed-loop DC inside `EthercatMaster::runCycle`:
 - `OEC_DC_CORRECTION_CLAMP_NS=<ns>`: PI correction output clamp.
 - `OEC_DC_MAX_CORR_STEP_NS=<ns>`: per-cycle absolute correction limit.
 - `OEC_DC_MAX_SLEW_NS=<ns>`: per-cycle slew limit between applied corrections.
+
+For DC sync quality supervision and policy actions:
+
+- `OEC_DC_SYNC_MONITOR=1`: enable per-cycle phase-error quality monitor.
+- `OEC_DC_SYNC_MAX_PHASE_ERROR_NS=<ns>`: in-window threshold for lock quality.
+- `OEC_DC_SYNC_LOCK_ACQUIRE_CYCLES=<N>`: consecutive in-window cycles required for lock.
+- `OEC_DC_SYNC_MAX_OOW_CYCLES=<N>`: consecutive out-of-window cycles before policy trigger.
+- `OEC_DC_SYNC_HISTORY_WINDOW=<N>`: rolling sample window for jitter percentiles.
+- `OEC_DC_SYNC_ACTION=warn|degrade|recover`: policy when out-of-window threshold is exceeded.

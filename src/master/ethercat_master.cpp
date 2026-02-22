@@ -13,6 +13,7 @@
 #include <cstdlib>
 #include <cmath>
 #include <type_traits>
+#include <vector>
 
 #include "openethercat/transport/linux_raw_socket_transport.hpp"
 
@@ -63,6 +64,34 @@ double parseDoubleEnv(const char* name, double defaultValue) {
     }
 }
 
+EthercatMaster::DcPolicyAction parseDcPolicyAction(const char* text,
+                                                   EthercatMaster::DcPolicyAction fallback) {
+    if (text == nullptr) {
+        return fallback;
+    }
+    const std::string value(text);
+    if (value == "warn" || value == "WARN") {
+        return EthercatMaster::DcPolicyAction::Warn;
+    }
+    if (value == "degrade" || value == "DEGRADE") {
+        return EthercatMaster::DcPolicyAction::Degrade;
+    }
+    if (value == "recover" || value == "RECOVER") {
+        return EthercatMaster::DcPolicyAction::Recover;
+    }
+    return fallback;
+}
+
+std::int64_t percentileFromSorted(const std::vector<std::int64_t>& sorted,
+                                  double percentile) {
+    if (sorted.empty()) {
+        return 0;
+    }
+    const auto index = static_cast<std::size_t>(
+        std::ceil((percentile / 100.0) * static_cast<double>(sorted.size())) - 1.0);
+    return sorted[std::min(index, sorted.size() - 1U)];
+}
+
 std::int64_t clampDcStep(std::int64_t correctionNs,
                          std::int64_t previousCorrectionNs,
                          std::int64_t maxStepNs,
@@ -100,6 +129,9 @@ bool EthercatMaster::configure(const NetworkConfiguration& config) {
     dcController_.reset();
     lastAppliedDcCorrectionNs_.reset();
     dcLinuxTransport_ = nullptr;
+    dcSyncQuality_ = DcSyncQualitySnapshot{};
+    dcPhaseErrorAbsHistoryNs_.clear();
+    dcPolicyLatched_ = false;
 
     // Validate before binding signals to avoid partially configured runtime state.
     const auto issues = ConfigurationValidator::validate(config);
@@ -453,12 +485,19 @@ bool EthercatMaster::eoeReceiveFrame(std::uint16_t slavePosition, std::vector<st
 std::optional<std::int64_t> EthercatMaster::updateDistributedClock(std::int64_t referenceTimeNs,
                                                                    std::int64_t localTimeNs) {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
-    return dcController_.update({referenceTimeNs, localTimeNs});
+    const auto correction = dcController_.update({referenceTimeNs, localTimeNs});
+    updateDcSyncQualityLocked(referenceTimeNs - localTimeNs);
+    return correction;
 }
 
 DcSyncStats EthercatMaster::distributedClockStats() const {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
     return dcController_.stats();
+}
+
+EthercatMaster::DcSyncQualitySnapshot EthercatMaster::distributedClockQuality() const {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    return dcSyncQuality_;
 }
 
 std::optional<std::int64_t> EthercatMaster::lastAppliedDcCorrectionNs() const {
@@ -525,6 +564,26 @@ void EthercatMaster::configureDcClosedLoopFromEnvironment() {
         parseIntegralEnv<std::int64_t>("OEC_DC_MAX_CORR_STEP_NS", dcClosedLoopOptions_.maxCorrectionStepNs);
     dcClosedLoopOptions_.maxSlewPerCycleNs =
         parseIntegralEnv<std::int64_t>("OEC_DC_MAX_SLEW_NS", dcClosedLoopOptions_.maxSlewPerCycleNs);
+    dcSyncQualityOptions_.enabled = parseBoolEnv("OEC_DC_SYNC_MONITOR", dcSyncQualityOptions_.enabled);
+    dcSyncQualityOptions_.maxPhaseErrorNs =
+        parseIntegralEnv<std::int64_t>("OEC_DC_SYNC_MAX_PHASE_ERROR_NS", dcSyncQualityOptions_.maxPhaseErrorNs);
+    dcSyncQualityOptions_.lockAcquireInWindowCycles =
+        parseIntegralEnv<std::size_t>("OEC_DC_SYNC_LOCK_ACQUIRE_CYCLES",
+                                      dcSyncQualityOptions_.lockAcquireInWindowCycles);
+    dcSyncQualityOptions_.maxConsecutiveOutOfWindowCycles =
+        parseIntegralEnv<std::size_t>("OEC_DC_SYNC_MAX_OOW_CYCLES",
+                                      dcSyncQualityOptions_.maxConsecutiveOutOfWindowCycles);
+    dcSyncQualityOptions_.historyWindowCycles =
+        parseIntegralEnv<std::size_t>("OEC_DC_SYNC_HISTORY_WINDOW",
+                                      dcSyncQualityOptions_.historyWindowCycles);
+    dcSyncQualityOptions_.policyAction = parseDcPolicyAction(
+        std::getenv("OEC_DC_SYNC_ACTION"),
+        dcSyncQualityOptions_.policyAction);
+
+    dcSyncQuality_ = DcSyncQualitySnapshot{};
+    dcSyncQuality_.enabled = dcSyncQualityOptions_.enabled;
+    dcPhaseErrorAbsHistoryNs_.clear();
+    dcPolicyLatched_ = false;
 
     DistributedClockController::Options dcOptions{};
     dcOptions.filterAlpha = parseDoubleEnv("OEC_DC_FILTER_ALPHA", dcOptions.filterAlpha);
@@ -563,6 +622,7 @@ bool EthercatMaster::runDcClosedLoopUpdate() {
     sample.referenceTimeNs = slaveTimeNs;
     sample.localTimeNs = hostTimeNs;
     const auto correction = dcController_.update(sample);
+    updateDcSyncQualityLocked(sample.referenceTimeNs - sample.localTimeNs);
     if (!correction.has_value()) {
         return true;
     }
@@ -580,6 +640,73 @@ bool EthercatMaster::runDcClosedLoopUpdate() {
 
     lastAppliedDcCorrectionNs_ = safeCorrection;
     return true;
+}
+
+void EthercatMaster::updateDcSyncQualityLocked(std::int64_t phaseErrorNs) {
+    if (!dcSyncQualityOptions_.enabled) {
+        return;
+    }
+    dcSyncQuality_.enabled = true;
+    dcSyncQuality_.lastPhaseErrorNs = phaseErrorNs;
+    ++dcSyncQuality_.samples;
+
+    const auto absError = static_cast<std::int64_t>(std::llabs(phaseErrorNs));
+    const bool inWindow = absError <= dcSyncQualityOptions_.maxPhaseErrorNs;
+    if (inWindow) {
+        ++dcSyncQuality_.consecutiveInWindowCycles;
+        dcSyncQuality_.consecutiveOutOfWindowCycles = 0U;
+        if (!dcSyncQuality_.locked &&
+            dcSyncQuality_.consecutiveInWindowCycles >= dcSyncQualityOptions_.lockAcquireInWindowCycles) {
+            dcSyncQuality_.locked = true;
+            ++dcSyncQuality_.lockAcquisitions;
+            dcPolicyLatched_ = false;
+        }
+    } else {
+        dcSyncQuality_.consecutiveInWindowCycles = 0U;
+        ++dcSyncQuality_.consecutiveOutOfWindowCycles;
+        if (dcSyncQuality_.locked) {
+            dcSyncQuality_.locked = false;
+            ++dcSyncQuality_.lockLosses;
+        }
+        if (dcSyncQuality_.consecutiveOutOfWindowCycles >=
+            dcSyncQualityOptions_.maxConsecutiveOutOfWindowCycles) {
+            applyDcPolicyLocked();
+        }
+    }
+
+    dcPhaseErrorAbsHistoryNs_.push_back(absError);
+    while (dcPhaseErrorAbsHistoryNs_.size() > dcSyncQualityOptions_.historyWindowCycles) {
+        dcPhaseErrorAbsHistoryNs_.pop_front();
+    }
+    std::vector<std::int64_t> sorted(dcPhaseErrorAbsHistoryNs_.begin(), dcPhaseErrorAbsHistoryNs_.end());
+    std::sort(sorted.begin(), sorted.end());
+    dcSyncQuality_.jitterP50Ns = percentileFromSorted(sorted, 50.0);
+    dcSyncQuality_.jitterP95Ns = percentileFromSorted(sorted, 95.0);
+    dcSyncQuality_.jitterP99Ns = percentileFromSorted(sorted, 99.0);
+    dcSyncQuality_.jitterMaxNs = sorted.empty() ? 0 : sorted.back();
+}
+
+void EthercatMaster::applyDcPolicyLocked() {
+    if (dcPolicyLatched_) {
+        return;
+    }
+    ++dcSyncQuality_.policyTriggers;
+    switch (dcSyncQualityOptions_.policyAction) {
+    case DcPolicyAction::Warn:
+        setError("DC sync out-of-window threshold exceeded");
+        break;
+    case DcPolicyAction::Degrade:
+        degraded_ = true;
+        setError("DC sync degraded: out-of-window threshold exceeded");
+        break;
+    case DcPolicyAction::Recover:
+        setError("DC sync recovery requested due to out-of-window threshold");
+        if (started_) {
+            (void)recoverNetwork();
+        }
+        break;
+    }
+    dcPolicyLatched_ = true;
 }
 
 bool EthercatMaster::transitionNetworkTo(SlaveState target) {

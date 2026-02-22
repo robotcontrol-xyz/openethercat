@@ -5,6 +5,7 @@
 
 #include <cassert>
 #include <chrono>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -73,6 +74,55 @@ int main() {
         assert(stats.samples == 2);
         assert(stats.maxAbsOffsetNs >= 800);
         assert(stats.jitterRmsNs > 0.0);
+    }
+
+    // Master DC sync quality monitor lock/loss and degrade policy.
+    {
+        ::setenv("OEC_DC_SYNC_MONITOR", "1", 1);
+        ::setenv("OEC_DC_SYNC_MAX_PHASE_ERROR_NS", "100", 1);
+        ::setenv("OEC_DC_SYNC_LOCK_ACQUIRE_CYCLES", "3", 1);
+        ::setenv("OEC_DC_SYNC_MAX_OOW_CYCLES", "2", 1);
+        ::setenv("OEC_DC_SYNC_HISTORY_WINDOW", "16", 1);
+        ::setenv("OEC_DC_SYNC_ACTION", "degrade", 1);
+
+        oec::MockTransport transport(1, 1);
+        oec::EthercatMaster master(transport);
+
+        oec::NetworkConfiguration cfg;
+        cfg.processImageInputBytes = 1;
+        cfg.processImageOutputBytes = 1;
+        cfg.slaves = {{.name = "EL1004", .alias = 0, .position = 1, .vendorId = 0x2, .productCode = 0x04c2c52}};
+        cfg.signals = {{.logicalName = "InputA", .direction = oec::SignalDirection::Input, .slaveName = "EL1004", .byteOffset = 0, .bitOffset = 0}};
+
+        assert(master.configure(cfg));
+        assert(master.start());
+
+        // Three in-window samples should acquire lock.
+        (void)master.updateDistributedClock(1'000'000, 1'000'010);
+        (void)master.updateDistributedClock(2'000'000, 2'000'015);
+        (void)master.updateDistributedClock(3'000'000, 3'000'020);
+        auto q = master.distributedClockQuality();
+        assert(q.enabled);
+        assert(q.locked);
+        assert(q.lockAcquisitions == 1);
+
+        // Two out-of-window samples should lose lock and trigger degrade policy.
+        (void)master.updateDistributedClock(4'000'000, 4'000'300);
+        (void)master.updateDistributedClock(5'000'000, 5'000'350);
+        q = master.distributedClockQuality();
+        assert(!q.locked);
+        assert(q.lockLosses >= 1);
+        assert(q.policyTriggers >= 1);
+        assert(master.isDegraded());
+        assert(q.jitterP99Ns >= q.jitterP50Ns);
+
+        master.stop();
+        ::unsetenv("OEC_DC_SYNC_MONITOR");
+        ::unsetenv("OEC_DC_SYNC_MAX_PHASE_ERROR_NS");
+        ::unsetenv("OEC_DC_SYNC_LOCK_ACQUIRE_CYCLES");
+        ::unsetenv("OEC_DC_SYNC_MAX_OOW_CYCLES");
+        ::unsetenv("OEC_DC_SYNC_HISTORY_WINDOW");
+        ::unsetenv("OEC_DC_SYNC_ACTION");
     }
 
     // Topology + hot-connect/missing + redundancy status.

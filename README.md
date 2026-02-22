@@ -92,6 +92,11 @@ OEC_DC_CLOSED_LOOP=1 OEC_DC_REFERENCE_SLAVE=1 OEC_DC_TARGET_PHASE_NS=0 \
 OEC_DC_KP=0.1 OEC_DC_KI=0.01 OEC_DC_CORRECTION_CLAMP_NS=20000 \
 OEC_DC_MAX_CORR_STEP_NS=20000 OEC_DC_MAX_SLEW_NS=5000 \
   sudo ./build/beckhoff_io_demo linux:eth0
+# Add sync quality supervision and policy action:
+OEC_DC_SYNC_MONITOR=1 OEC_DC_SYNC_MAX_PHASE_ERROR_NS=50000 \
+OEC_DC_SYNC_LOCK_ACQUIRE_CYCLES=20 OEC_DC_SYNC_MAX_OOW_CYCLES=10 \
+OEC_DC_SYNC_ACTION=warn \
+  sudo ./build/beckhoff_io_demo linux:eth0
 ```
 
 The demo uses `MockTransport` so it runs without root and without EtherCAT hardware.

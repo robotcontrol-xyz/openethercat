@@ -10,6 +10,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <optional>
 #include <unordered_map>
 #include <vector>
@@ -39,6 +40,46 @@ class LinuxRawSocketTransport;
  */
 class EthercatMaster {
 public:
+    /**
+     * @brief DC sync supervision policy when phase error violates thresholds.
+     */
+    enum class DcPolicyAction {
+        Warn,
+        Degrade,
+        Recover
+    };
+
+    /**
+     * @brief Runtime knobs for DC sync quality supervision.
+     */
+    struct DcSyncQualityOptions {
+        bool enabled = false;
+        std::int64_t maxPhaseErrorNs = 50000;
+        std::size_t lockAcquireInWindowCycles = 20;
+        std::size_t maxConsecutiveOutOfWindowCycles = 10;
+        std::size_t historyWindowCycles = 256;
+        DcPolicyAction policyAction = DcPolicyAction::Warn;
+    };
+
+    /**
+     * @brief Snapshot of DC sync quality and lock state.
+     */
+    struct DcSyncQualitySnapshot {
+        bool enabled = false;
+        bool locked = false;
+        std::int64_t lastPhaseErrorNs = 0;
+        std::uint64_t samples = 0;
+        std::size_t consecutiveInWindowCycles = 0;
+        std::size_t consecutiveOutOfWindowCycles = 0;
+        std::uint64_t lockAcquisitions = 0;
+        std::uint64_t lockLosses = 0;
+        std::uint64_t policyTriggers = 0;
+        std::int64_t jitterP50Ns = 0;
+        std::int64_t jitterP95Ns = 0;
+        std::int64_t jitterP99Ns = 0;
+        std::int64_t jitterMaxNs = 0;
+    };
+
     /**
      * @brief Startup state-machine behavior for INIT->PRE-OP->SAFE-OP->OP transitions.
      */
@@ -159,6 +200,7 @@ public:
     std::optional<std::int64_t> updateDistributedClock(std::int64_t referenceTimeNs,
                                                        std::int64_t localTimeNs);
     DcSyncStats distributedClockStats() const;
+    DcSyncQualitySnapshot distributedClockQuality() const;
     /**
      * @brief Last applied DC correction from closed-loop mode (ns).
      */
@@ -191,6 +233,8 @@ private:
     };
 
     void setError(std::string message);
+    void updateDcSyncQualityLocked(std::int64_t phaseErrorNs);
+    void applyDcPolicyLocked();
     void configureDcClosedLoopFromEnvironment();
     bool runDcClosedLoopUpdate();
     bool transitionNetworkTo(SlaveState target);
@@ -205,6 +249,10 @@ private:
     DcClosedLoopOptions dcClosedLoopOptions_{};
     std::optional<std::int64_t> lastAppliedDcCorrectionNs_;
     LinuxRawSocketTransport* dcLinuxTransport_ = nullptr;
+    DcSyncQualityOptions dcSyncQualityOptions_{};
+    DcSyncQualitySnapshot dcSyncQuality_{};
+    std::deque<std::int64_t> dcPhaseErrorAbsHistoryNs_;
+    bool dcPolicyLatched_ = false;
     TopologyManager topologyManager_;
     IoMapper mapper_;
     NetworkConfiguration config_{};
