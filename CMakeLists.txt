@@ -91,6 +91,9 @@ if(OEC_BUILD_EXAMPLES)
     add_executable(physical_topology_scan_demo examples/physical_topology_scan_demo.cpp)
     target_link_libraries(physical_topology_scan_demo PRIVATE openethercat)
 
+    add_executable(topology_reconcile_demo examples/topology_reconcile_demo.cpp)
+    target_link_libraries(topology_reconcile_demo PRIVATE openethercat)
+
     add_executable(mailbox_soak_demo examples/mailbox_soak_demo.cpp)
     target_link_libraries(mailbox_soak_demo PRIVATE openethercat)
 

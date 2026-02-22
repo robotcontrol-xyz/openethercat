@@ -72,7 +72,7 @@ Status: In progress (implementation largely complete; hardware KPI evidence pend
 
 ## Phase 3: Topology, hot-connect, and redundancy
 
-Status: Partial architecture present.
+Status: In progress (reconciliation change-set foundation added).
 
 ### Scope
 

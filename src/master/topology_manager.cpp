@@ -5,6 +5,8 @@
 
 #include "openethercat/master/topology_manager.hpp"
 
+#include <algorithm>
+#include <unordered_map>
 #include <unordered_set>
 
 namespace oec {
@@ -20,7 +22,71 @@ bool TopologyManager::refresh(std::string& outError) {
     if (!newSnapshot.redundancyHealthy && !outError.empty()) {
         return false;
     }
+    TopologyChangeSet changes;
+    changes.generation = generation_ + 1U;
+    changes.previousRedundancyHealthy = snapshot_.redundancyHealthy;
+    changes.redundancyHealthy = newSnapshot.redundancyHealthy;
+    changes.redundancyChanged = (changes.previousRedundancyHealthy != changes.redundancyHealthy);
+
+    std::unordered_map<std::uint16_t, TopologySlaveInfo> previousByPosition;
+    previousByPosition.reserve(snapshot_.slaves.size());
+    for (const auto& slave : snapshot_.slaves) {
+        previousByPosition[slave.position] = slave;
+    }
+
+    std::unordered_map<std::uint16_t, TopologySlaveInfo> currentByPosition;
+    currentByPosition.reserve(newSnapshot.slaves.size());
+    for (const auto& slave : newSnapshot.slaves) {
+        currentByPosition[slave.position] = slave;
+    }
+
+    for (const auto& kv : currentByPosition) {
+        const auto pos = kv.first;
+        const auto& now = kv.second;
+        const auto previousIt = previousByPosition.find(pos);
+        if (previousIt == previousByPosition.end()) {
+            changes.added.push_back(now);
+            continue;
+        }
+        const auto& prev = previousIt->second;
+        if (prev.online != now.online ||
+            prev.vendorId != now.vendorId ||
+            prev.productCode != now.productCode ||
+            prev.alStateValid != now.alStateValid ||
+            (prev.alStateValid && now.alStateValid && prev.alState != now.alState)) {
+            TopologySlaveDelta delta;
+            delta.position = pos;
+            delta.wasOnline = prev.online;
+            delta.isOnline = now.online;
+            delta.previousVendorId = prev.vendorId;
+            delta.previousProductCode = prev.productCode;
+            delta.vendorId = now.vendorId;
+            delta.productCode = now.productCode;
+            changes.updated.push_back(delta);
+        }
+    }
+
+    for (const auto& kv : previousByPosition) {
+        if (currentByPosition.find(kv.first) == currentByPosition.end()) {
+            changes.removed.push_back(kv.second);
+        }
+    }
+
+    changes.changed = changes.redundancyChanged ||
+                      !changes.added.empty() ||
+                      !changes.removed.empty() ||
+                      !changes.updated.empty();
+
+    std::sort(changes.added.begin(), changes.added.end(),
+              [](const TopologySlaveInfo& a, const TopologySlaveInfo& b) { return a.position < b.position; });
+    std::sort(changes.removed.begin(), changes.removed.end(),
+              [](const TopologySlaveInfo& a, const TopologySlaveInfo& b) { return a.position < b.position; });
+    std::sort(changes.updated.begin(), changes.updated.end(),
+              [](const TopologySlaveDelta& a, const TopologySlaveDelta& b) { return a.position < b.position; });
+
     snapshot_ = std::move(newSnapshot);
+    changeSet_ = std::move(changes);
+    generation_ = changeSet_.generation;
     return true;
 }
 
@@ -68,5 +134,7 @@ std::vector<SlaveIdentity> TopologyManager::detectMissing(const std::vector<Slav
 }
 
 TopologySnapshot TopologyManager::snapshot() const { return snapshot_; }
+TopologyChangeSet TopologyManager::changeSet() const { return changeSet_; }
+std::uint64_t TopologyManager::generation() const { return generation_; }
 
 } // namespace oec

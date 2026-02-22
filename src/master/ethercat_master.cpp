@@ -517,6 +517,16 @@ TopologySnapshot EthercatMaster::topologySnapshot() const {
     return topologyManager_.snapshot();
 }
 
+TopologyChangeSet EthercatMaster::topologyChangeSet() const {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    return topologyManager_.changeSet();
+}
+
+std::uint64_t EthercatMaster::topologyGeneration() const {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    return topologyManager_.generation();
+}
+
 std::vector<SlaveIdentity> EthercatMaster::hotConnectedSlaves() const {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
     return topologyManager_.detectHotConnected(config_.slaves);

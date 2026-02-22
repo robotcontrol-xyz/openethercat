@@ -40,6 +40,33 @@ struct TopologySnapshot {
 };
 
 /**
+ * @brief Per-slave delta entry between two topology snapshots.
+ */
+struct TopologySlaveDelta {
+    std::uint16_t position = 0;
+    bool wasOnline = false;
+    bool isOnline = false;
+    std::uint32_t previousVendorId = 0;
+    std::uint32_t previousProductCode = 0;
+    std::uint32_t vendorId = 0;
+    std::uint32_t productCode = 0;
+};
+
+/**
+ * @brief Deterministic topology change set emitted by refresh().
+ */
+struct TopologyChangeSet {
+    std::uint64_t generation = 0;
+    bool changed = false;
+    bool redundancyChanged = false;
+    bool previousRedundancyHealthy = true;
+    bool redundancyHealthy = true;
+    std::vector<TopologySlaveInfo> added;
+    std::vector<TopologySlaveInfo> removed;
+    std::vector<TopologySlaveDelta> updated;
+};
+
+/**
  * @brief Topology and hot-connect manager over transport discovery hooks.
  */
 class TopologyManager {
@@ -51,10 +78,14 @@ public:
     std::vector<SlaveIdentity> detectMissing(const std::vector<SlaveIdentity>& expected) const;
 
     TopologySnapshot snapshot() const;
+    TopologyChangeSet changeSet() const;
+    std::uint64_t generation() const;
 
 private:
     ITransport& transport_;
     TopologySnapshot snapshot_{};
+    TopologyChangeSet changeSet_{};
+    std::uint64_t generation_ = 0;
 };
 
 } // namespace oec

@@ -211,6 +211,8 @@ public:
      */
     bool refreshTopology(std::string& outError);
     TopologySnapshot topologySnapshot() const;
+    TopologyChangeSet topologyChangeSet() const;
+    std::uint64_t topologyGeneration() const;
     std::vector<SlaveIdentity> hotConnectedSlaves() const;
     std::vector<SlaveIdentity> missingSlaves() const;
     HilConformanceReport evaluateHilConformance(double maxFailureRate,

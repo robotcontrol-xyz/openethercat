@@ -150,12 +150,35 @@ int main() {
 
         std::string topoError;
         assert(master.refreshTopology(topoError));
+        const auto c1 = master.topologyChangeSet();
+        assert(c1.generation == 1U);
+        assert(c1.changed);
+        assert(c1.added.size() == 2U);
+        assert(c1.removed.empty());
         const auto missing = master.missingSlaves();
         const auto hot = master.hotConnectedSlaves();
         assert(missing.size() == 1);
         assert(missing[0].position == 2);
         assert(hot.size() == 1);
         assert(hot[0].position == 3);
+
+        // Reconcile updated topology and verify deterministic deltas.
+        transport.setDiscoveredSlaves({
+            {.position = 1, .vendorId = 0x2, .productCode = 0x03f03052, .online = true},
+            {.position = 2, .vendorId = 0x2, .productCode = 0x07d83052, .online = true},
+            {.position = 3, .vendorId = 0x2, .productCode = 0x0AAA0001, .online = true},
+        });
+        transport.setRedundancyHealthy(true);
+        assert(master.refreshTopology(topoError));
+        const auto c2 = master.topologyChangeSet();
+        assert(c2.generation == 2U);
+        assert(c2.changed);
+        assert(c2.redundancyChanged);
+        assert(c2.added.size() == 1U);
+        assert(c2.added[0].position == 2U);
+        assert(c2.removed.empty());
+        assert(c2.updated.empty());
+        assert(master.topologyGeneration() == 2U);
 
         master.stop();
     }
