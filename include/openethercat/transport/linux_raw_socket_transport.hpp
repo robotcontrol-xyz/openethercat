@@ -29,6 +29,7 @@ struct MailboxDiagnostics {
     std::uint64_t staleCounterDrops = 0;
     std::uint64_t parseRejects = 0;
     std::uint64_t emergencyQueued = 0;
+    std::uint64_t emergencyDropped = 0;
     std::uint64_t matchedResponses = 0;
 };
 
@@ -94,6 +95,8 @@ public:
     void resetMailboxDiagnostics();
     void setMailboxStatusMode(MailboxStatusMode mode);
     MailboxStatusMode mailboxStatusMode() const;
+    void setEmergencyQueueLimit(std::size_t limit);
+    std::size_t emergencyQueueLimit() const;
 
 private:
     struct ProcessDataWindow {
@@ -129,6 +132,7 @@ private:
     std::queue<EmergencyMessage> emergencies_;
     MailboxDiagnostics mailboxDiagnostics_{};
     MailboxStatusMode mailboxStatusMode_ = MailboxStatusMode::Hybrid;
+    std::size_t emergencyQueueLimit_ = 256U;
 };
 
 } // namespace oec

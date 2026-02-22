@@ -314,6 +314,13 @@ void LinuxRawSocketTransport::setMailboxConfiguration(std::uint16_t writeOffset,
 bool LinuxRawSocketTransport::open() {
     close();
     mailboxStatusMode_ = parseMailboxStatusMode(std::getenv("OEC_MAILBOX_STATUS_MODE"));
+    if (const char* env = std::getenv("OEC_MAILBOX_EMERGENCY_QUEUE_LIMIT")) {
+        try {
+            emergencyQueueLimit_ = std::max<std::size_t>(1U, static_cast<std::size_t>(std::stoul(env, nullptr, 0)));
+        } catch (...) {
+            // Keep default on parse failure.
+        }
+    }
     lastWorkingCounter_ = 0;
     if (!openEthercatInterfaceSocket(ifname_, socketFd_, ifIndex_, sourceMac_, error_)) {
         close();
@@ -696,6 +703,14 @@ bool LinuxRawSocketTransport::sdoUpload(std::uint16_t slavePosition, const SdoAd
         return fail();
     }
     const auto statusMode = mailboxStatusMode_;
+    auto enqueueEmergency = [&](const EmergencyMessage& emergency) {
+        if (emergencies_.size() >= emergencyQueueLimit_) {
+            emergencies_.pop();
+            ++mailboxDiagnostics_.emergencyDropped;
+        }
+        emergencies_.push(emergency);
+        ++mailboxDiagnostics_.emergencyQueued;
+    };
     const auto adp = toAutoIncrementAddress(slavePosition);
     std::uint16_t writeOffset = mailboxWriteOffset_;
     std::uint16_t writeSize = mailboxWriteSize_;
@@ -920,8 +935,7 @@ bool LinuxRawSocketTransport::sdoUpload(std::uint16_t slavePosition, const SdoAd
             }
             EmergencyMessage emergency {};
             if (CoeMailboxProtocol::parseEmergency(decoded->payload, slavePosition, emergency)) {
-                emergencies_.push(emergency);
-                ++mailboxDiagnostics_.emergencyQueued;
+                enqueueEmergency(emergency);
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
                 continue;
             }
@@ -1046,6 +1060,14 @@ bool LinuxRawSocketTransport::sdoDownload(std::uint16_t slavePosition, const Sdo
         return fail();
     }
     const auto statusMode = mailboxStatusMode_;
+    auto enqueueEmergency = [&](const EmergencyMessage& emergency) {
+        if (emergencies_.size() >= emergencyQueueLimit_) {
+            emergencies_.pop();
+            ++mailboxDiagnostics_.emergencyDropped;
+        }
+        emergencies_.push(emergency);
+        ++mailboxDiagnostics_.emergencyQueued;
+    };
     const auto adp = toAutoIncrementAddress(slavePosition);
     std::uint16_t writeOffset = mailboxWriteOffset_;
     std::uint16_t writeSize = mailboxWriteSize_;
@@ -1270,8 +1292,7 @@ bool LinuxRawSocketTransport::sdoDownload(std::uint16_t slavePosition, const Sdo
             }
             EmergencyMessage emergency {};
             if (CoeMailboxProtocol::parseEmergency(decoded->payload, slavePosition, emergency)) {
-                emergencies_.push(emergency);
-                ++mailboxDiagnostics_.emergencyQueued;
+                enqueueEmergency(emergency);
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
                 continue;
             }
@@ -2006,5 +2027,13 @@ MailboxDiagnostics LinuxRawSocketTransport::mailboxDiagnostics() const { return 
 void LinuxRawSocketTransport::resetMailboxDiagnostics() { mailboxDiagnostics_ = MailboxDiagnostics{}; }
 void LinuxRawSocketTransport::setMailboxStatusMode(MailboxStatusMode mode) { mailboxStatusMode_ = mode; }
 MailboxStatusMode LinuxRawSocketTransport::mailboxStatusMode() const { return mailboxStatusMode_; }
+void LinuxRawSocketTransport::setEmergencyQueueLimit(std::size_t limit) {
+    emergencyQueueLimit_ = std::max<std::size_t>(1U, limit);
+    while (emergencies_.size() > emergencyQueueLimit_) {
+        emergencies_.pop();
+        ++mailboxDiagnostics_.emergencyDropped;
+    }
+}
+std::size_t LinuxRawSocketTransport::emergencyQueueLimit() const { return emergencyQueueLimit_; }
 
 } // namespace oec

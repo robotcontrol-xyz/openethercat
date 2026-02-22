@@ -101,6 +101,7 @@ int main(int argc, char** argv) {
         if (linux) {
             linux->resetMailboxDiagnostics();
             std::cout << "mailbox_status_mode=" << toModeName(linux->mailboxStatusMode()) << '\n';
+            std::cout << "mailbox_emergency_queue_limit=" << linux->emergencyQueueLimit() << '\n';
         }
 
         const oec::SdoAddress address{.index = index, .subIndex = subIndex};
@@ -156,6 +157,7 @@ int main(int argc, char** argv) {
                       << " stale_drop=" << d.staleCounterDrops
                       << " parse_reject=" << d.parseRejects
                       << " emergencies=" << d.emergencyQueued
+                      << " emergencies_dropped=" << d.emergencyDropped
                       << " matched=" << d.matchedResponses
                       << '\n';
         }

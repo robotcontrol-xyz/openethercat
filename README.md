@@ -24,6 +24,7 @@ This repository provides:
 - Mailbox robustness hardening: mailbox-counter correlation per SDO transaction and emergency-frame queueing during mailbox waits.
 - Mailbox regression coverage: mixed-stream protocol tests for emergency + stale frame + valid correlated response selection.
 - Mailbox status modes for ESC variance: `OEC_MAILBOX_STATUS_MODE=strict|hybrid|poll` (default `hybrid`).
+- Mailbox emergency queue hardening: bounded queue with overflow/drop accounting (`OEC_MAILBOX_EMERGENCY_QUEUE_LIMIT`).
 - FoE/EoE service APIs (read/write file, send/receive encapsulated Ethernet frame).
 - Distributed clock sync controller with filtered offset, PI correction, and jitter stats.
 - Topology manager with hot-connect/missing detection and redundancy health checks.
@@ -135,6 +136,7 @@ sudo OEC_TRACE_MAP=1 OEC_TRACE_WKC=1 OEC_TRACE_OUTPUT_VERIFY=1 \
 - `docs/ds402-cubic-trajectory.md`: DS402 CSP motion example design and sequence.
 - `docs/ethercat-primer.md`: EtherCAT fundamentals, acronym glossary, and trace interpretation guide.
   Includes process-image structure diagrams and EL1004/EL2004 byte/bit mapping examples.
+- `docs/production-roadmap.md`: phased plan and acceptance gates for production readiness.
 
 ## Extension points
 
