@@ -83,6 +83,30 @@ EthercatMaster::DcPolicyAction parseDcPolicyAction(const char* text,
     return fallback;
 }
 
+EthercatMaster::TopologyPolicyAction parseTopologyPolicyAction(
+    const char* text, EthercatMaster::TopologyPolicyAction fallback) {
+    if (text == nullptr) {
+        return fallback;
+    }
+    const std::string value(text);
+    if (value == "monitor" || value == "MONITOR") {
+        return EthercatMaster::TopologyPolicyAction::Monitor;
+    }
+    if (value == "retry" || value == "RETRY") {
+        return EthercatMaster::TopologyPolicyAction::Retry;
+    }
+    if (value == "reconfigure" || value == "RECONFIGURE") {
+        return EthercatMaster::TopologyPolicyAction::Reconfigure;
+    }
+    if (value == "degrade" || value == "DEGRADE") {
+        return EthercatMaster::TopologyPolicyAction::Degrade;
+    }
+    if (value == "failstop" || value == "FAILSTOP" || value == "fail-stop" || value == "FAIL-STOP") {
+        return EthercatMaster::TopologyPolicyAction::FailStop;
+    }
+    return fallback;
+}
+
 std::int64_t percentileFromSorted(const std::vector<std::int64_t>& sorted,
                                   double percentile) {
     if (sorted.empty()) {
@@ -133,6 +157,12 @@ bool EthercatMaster::configure(const NetworkConfiguration& config) {
     dcSyncQuality_ = DcSyncQualitySnapshot{};
     dcPhaseErrorAbsHistoryNs_.clear();
     dcPolicyLatched_ = false;
+    missingConditionCycles_ = 0;
+    hotConnectConditionCycles_ = 0;
+    redundancyConditionCycles_ = 0;
+    missingPolicyLatched_ = false;
+    hotConnectPolicyLatched_ = false;
+    redundancyPolicyLatched_ = false;
     dcTraceCounter_ = 0;
 
     // Validate before binding signals to avoid partially configured runtime state.
@@ -174,6 +204,7 @@ bool EthercatMaster::start() {
         return false;
     }
     configureDcClosedLoopFromEnvironment();
+    configureTopologyRecoveryFromEnvironment();
 
     // Optionally drive a full AL startup ladder so cyclic exchange starts from OP.
     if (stateMachineOptions_.enable) {
@@ -334,6 +365,20 @@ void EthercatMaster::setRecoveryOptions(RecoveryOptions options) {
     recoveryOptions_ = options;
     if (recoveryOptions_.maxEventHistory == 0U) {
         recoveryOptions_.maxEventHistory = 1U;
+    }
+}
+
+void EthercatMaster::setTopologyRecoveryOptions(TopologyRecoveryOptions options) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    topologyRecoveryOptions_ = options;
+    if (topologyRecoveryOptions_.missingGraceCycles == 0U) {
+        topologyRecoveryOptions_.missingGraceCycles = 1U;
+    }
+    if (topologyRecoveryOptions_.hotConnectGraceCycles == 0U) {
+        topologyRecoveryOptions_.hotConnectGraceCycles = 1U;
+    }
+    if (topologyRecoveryOptions_.redundancyGraceCycles == 0U) {
+        topologyRecoveryOptions_.redundancyGraceCycles = 1U;
     }
 }
 
@@ -509,7 +554,16 @@ std::optional<std::int64_t> EthercatMaster::lastAppliedDcCorrectionNs() const {
 
 bool EthercatMaster::refreshTopology(std::string& outError) {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
-    return topologyManager_.refresh(outError);
+    if (!topologyManager_.refresh(outError)) {
+        return false;
+    }
+    if (topologyRecoveryOptions_.enable) {
+        const auto missing = topologyManager_.detectMissing(config_.slaves);
+        const auto hotConnected = topologyManager_.detectHotConnected(config_.slaves);
+        const auto changes = topologyManager_.changeSet();
+        applyTopologyPolicyIfNeeded(missing, hotConnected, changes.redundancyHealthy, changes.generation);
+    }
+    return true;
 }
 
 TopologySnapshot EthercatMaster::topologySnapshot() const {
@@ -610,6 +664,204 @@ void EthercatMaster::configureDcClosedLoopFromEnvironment() {
 
     lastAppliedDcCorrectionNs_.reset();
     dcLinuxTransport_ = dynamic_cast<LinuxRawSocketTransport*>(&transport_);
+}
+
+void EthercatMaster::configureTopologyRecoveryFromEnvironment() {
+    topologyRecoveryOptions_.enable =
+        parseBoolEnv("OEC_TOPOLOGY_POLICY_ENABLE", topologyRecoveryOptions_.enable);
+    topologyRecoveryOptions_.missingGraceCycles =
+        parseIntegralEnv<std::size_t>("OEC_TOPOLOGY_MISSING_GRACE", topologyRecoveryOptions_.missingGraceCycles);
+    topologyRecoveryOptions_.hotConnectGraceCycles =
+        parseIntegralEnv<std::size_t>("OEC_TOPOLOGY_HOTCONNECT_GRACE", topologyRecoveryOptions_.hotConnectGraceCycles);
+    topologyRecoveryOptions_.redundancyGraceCycles =
+        parseIntegralEnv<std::size_t>("OEC_TOPOLOGY_REDUNDANCY_GRACE", topologyRecoveryOptions_.redundancyGraceCycles);
+    topologyRecoveryOptions_.missingSlaveAction = parseTopologyPolicyAction(
+        std::getenv("OEC_TOPOLOGY_MISSING_ACTION"),
+        topologyRecoveryOptions_.missingSlaveAction);
+    topologyRecoveryOptions_.hotConnectAction = parseTopologyPolicyAction(
+        std::getenv("OEC_TOPOLOGY_HOTCONNECT_ACTION"),
+        topologyRecoveryOptions_.hotConnectAction);
+    topologyRecoveryOptions_.redundancyAction = parseTopologyPolicyAction(
+        std::getenv("OEC_TOPOLOGY_REDUNDANCY_ACTION"),
+        topologyRecoveryOptions_.redundancyAction);
+
+    if (topologyRecoveryOptions_.missingGraceCycles == 0U) {
+        topologyRecoveryOptions_.missingGraceCycles = 1U;
+    }
+    if (topologyRecoveryOptions_.hotConnectGraceCycles == 0U) {
+        topologyRecoveryOptions_.hotConnectGraceCycles = 1U;
+    }
+    if (topologyRecoveryOptions_.redundancyGraceCycles == 0U) {
+        topologyRecoveryOptions_.redundancyGraceCycles = 1U;
+    }
+
+    missingConditionCycles_ = 0;
+    hotConnectConditionCycles_ = 0;
+    redundancyConditionCycles_ = 0;
+    missingPolicyLatched_ = false;
+    hotConnectPolicyLatched_ = false;
+    redundancyPolicyLatched_ = false;
+}
+
+RecoveryAction EthercatMaster::mapTopologyActionToRecoveryAction(TopologyPolicyAction action) const {
+    switch (action) {
+    case TopologyPolicyAction::Monitor:
+        return RecoveryAction::None;
+    case TopologyPolicyAction::Retry:
+        return RecoveryAction::RetryTransition;
+    case TopologyPolicyAction::Reconfigure:
+        return RecoveryAction::Reconfigure;
+    case TopologyPolicyAction::Degrade:
+    case TopologyPolicyAction::FailStop:
+        return RecoveryAction::Failover;
+    }
+    return RecoveryAction::None;
+}
+
+void EthercatMaster::applyTopologyPolicyIfNeeded(const std::vector<SlaveIdentity>& missing,
+                                                 const std::vector<SlaveIdentity>& hotConnected,
+                                                 bool redundancyHealthy,
+                                                 std::uint64_t topologyGeneration) {
+    const bool hasMissing = !missing.empty();
+    const bool hasHotConnected = !hotConnected.empty();
+    const bool redundancyDown = !redundancyHealthy;
+
+    missingConditionCycles_ = hasMissing ? (missingConditionCycles_ + 1U) : 0U;
+    hotConnectConditionCycles_ = hasHotConnected ? (hotConnectConditionCycles_ + 1U) : 0U;
+    redundancyConditionCycles_ = redundancyDown ? (redundancyConditionCycles_ + 1U) : 0U;
+
+    if (!hasMissing) {
+        missingPolicyLatched_ = false;
+    }
+    if (!hasHotConnected) {
+        hotConnectPolicyLatched_ = false;
+    }
+    if (!redundancyDown) {
+        redundancyPolicyLatched_ = false;
+    }
+
+    auto emitEvent = [&](std::uint16_t slavePosition,
+                         TopologyPolicyAction policyAction,
+                         bool success,
+                         const std::string& reason) {
+        RecoveryEvent event;
+        event.timestamp = std::chrono::system_clock::now();
+        event.cycleIndex = statistics_.cyclesTotal;
+        event.slavePosition = slavePosition;
+        event.alStatusCode = 0U;
+        event.action = mapTopologyActionToRecoveryAction(policyAction);
+        event.success = success;
+        event.message = "topology_generation=" + std::to_string(topologyGeneration) + " " + reason;
+        appendRecoveryEvent(event);
+    };
+
+    if (hasMissing &&
+        !missingPolicyLatched_ &&
+        missingConditionCycles_ >= topologyRecoveryOptions_.missingGraceCycles) {
+        switch (topologyRecoveryOptions_.missingSlaveAction) {
+        case TopologyPolicyAction::Monitor:
+            emitEvent(missing.front().position, topologyRecoveryOptions_.missingSlaveAction, true,
+                      "missing-slave monitor");
+            break;
+        case TopologyPolicyAction::Retry: {
+            const bool ok = recoverNetwork();
+            emitEvent(missing.front().position, topologyRecoveryOptions_.missingSlaveAction, ok,
+                      ok ? "missing-slave retry recovery succeeded" : "missing-slave retry recovery failed");
+            break;
+        }
+        case TopologyPolicyAction::Reconfigure: {
+            const bool ok = recoverNetwork();
+            emitEvent(missing.front().position, topologyRecoveryOptions_.missingSlaveAction, ok,
+                      ok ? "missing-slave reconfigure recovery succeeded"
+                         : "missing-slave reconfigure recovery failed");
+            break;
+        }
+        case TopologyPolicyAction::Degrade:
+            degraded_ = true;
+            emitEvent(missing.front().position, topologyRecoveryOptions_.missingSlaveAction, true,
+                      "missing-slave degraded");
+            break;
+        case TopologyPolicyAction::FailStop:
+            degraded_ = true;
+            started_ = false;
+            transport_.close();
+            emitEvent(missing.front().position, topologyRecoveryOptions_.missingSlaveAction, true,
+                      "missing-slave fail-stop");
+            break;
+        }
+        missingPolicyLatched_ = true;
+    }
+
+    if (hasHotConnected &&
+        !hotConnectPolicyLatched_ &&
+        hotConnectConditionCycles_ >= topologyRecoveryOptions_.hotConnectGraceCycles) {
+        switch (topologyRecoveryOptions_.hotConnectAction) {
+        case TopologyPolicyAction::Monitor:
+            emitEvent(hotConnected.front().position, topologyRecoveryOptions_.hotConnectAction, true,
+                      "hot-connect monitor");
+            break;
+        case TopologyPolicyAction::Retry: {
+            const bool ok = recoverNetwork();
+            emitEvent(hotConnected.front().position, topologyRecoveryOptions_.hotConnectAction, ok,
+                      ok ? "hot-connect retry recovery succeeded" : "hot-connect retry recovery failed");
+            break;
+        }
+        case TopologyPolicyAction::Reconfigure: {
+            const bool ok = recoverNetwork();
+            emitEvent(hotConnected.front().position, topologyRecoveryOptions_.hotConnectAction, ok,
+                      ok ? "hot-connect reconfigure recovery succeeded"
+                         : "hot-connect reconfigure recovery failed");
+            break;
+        }
+        case TopologyPolicyAction::Degrade:
+            degraded_ = true;
+            emitEvent(hotConnected.front().position, topologyRecoveryOptions_.hotConnectAction, true,
+                      "hot-connect degraded");
+            break;
+        case TopologyPolicyAction::FailStop:
+            degraded_ = true;
+            started_ = false;
+            transport_.close();
+            emitEvent(hotConnected.front().position, topologyRecoveryOptions_.hotConnectAction, true,
+                      "hot-connect fail-stop");
+            break;
+        }
+        hotConnectPolicyLatched_ = true;
+    }
+
+    if (redundancyDown &&
+        !redundancyPolicyLatched_ &&
+        redundancyConditionCycles_ >= topologyRecoveryOptions_.redundancyGraceCycles) {
+        switch (topologyRecoveryOptions_.redundancyAction) {
+        case TopologyPolicyAction::Monitor:
+            emitEvent(0U, topologyRecoveryOptions_.redundancyAction, true, "redundancy-down monitor");
+            break;
+        case TopologyPolicyAction::Retry: {
+            const bool ok = recoverNetwork();
+            emitEvent(0U, topologyRecoveryOptions_.redundancyAction, ok,
+                      ok ? "redundancy-down retry recovery succeeded" : "redundancy-down retry recovery failed");
+            break;
+        }
+        case TopologyPolicyAction::Reconfigure: {
+            const bool ok = recoverNetwork();
+            emitEvent(0U, topologyRecoveryOptions_.redundancyAction, ok,
+                      ok ? "redundancy-down reconfigure recovery succeeded"
+                         : "redundancy-down reconfigure recovery failed");
+            break;
+        }
+        case TopologyPolicyAction::Degrade:
+            degraded_ = true;
+            emitEvent(0U, topologyRecoveryOptions_.redundancyAction, true, "redundancy-down degraded");
+            break;
+        case TopologyPolicyAction::FailStop:
+            degraded_ = true;
+            started_ = false;
+            transport_.close();
+            emitEvent(0U, topologyRecoveryOptions_.redundancyAction, true, "redundancy-down fail-stop");
+            break;
+        }
+        redundancyPolicyLatched_ = true;
+    }
 }
 
 bool EthercatMaster::runDcClosedLoopUpdate() {

@@ -207,6 +207,48 @@ int main() {
         fs::remove_all(base);
     }
 
+    // Topology policy execution: missing slave triggers deterministic fail-stop action.
+    {
+        oec::NetworkConfiguration cfg;
+        cfg.processImageInputBytes = 1;
+        cfg.processImageOutputBytes = 1;
+        cfg.slaves = {
+            {.name = "EK1100", .alias = 0, .position = 0, .vendorId = 0x00000002, .productCode = 0x044c2c52},
+            {.name = "EL1004", .alias = 0, .position = 1, .vendorId = 0x00000002, .productCode = 0x03ec3052},
+        };
+        cfg.signals = {
+            {.logicalName = "InputA", .direction = oec::SignalDirection::Input, .slaveName = "EL1004", .byteOffset = 0, .bitOffset = 0},
+        };
+
+        oec::MockTransport transport(1, 1);
+        oec::EthercatMaster master(transport);
+        assert(master.configure(cfg));
+        auto stateOptions = oec::EthercatMaster::StateMachineOptions{};
+        stateOptions.enable = false;
+        master.setStateMachineOptions(stateOptions);
+        auto topoOptions = oec::EthercatMaster::TopologyRecoveryOptions{};
+        topoOptions.enable = true;
+        topoOptions.missingGraceCycles = 1U;
+        topoOptions.missingSlaveAction = oec::EthercatMaster::TopologyPolicyAction::FailStop;
+        topoOptions.hotConnectAction = oec::EthercatMaster::TopologyPolicyAction::Monitor;
+        topoOptions.redundancyAction = oec::EthercatMaster::TopologyPolicyAction::Monitor;
+        master.setTopologyRecoveryOptions(topoOptions);
+        assert(master.start());
+
+        transport.setDiscoveredSlaves({
+            {.position = 0, .vendorId = 0x00000002, .productCode = 0x044c2c52, .online = true},
+            // position 1 intentionally missing
+        });
+
+        std::string topoError;
+        assert(master.refreshTopology(topoError));
+        const auto events = master.recoveryEvents();
+        assert(!events.empty());
+        assert(events.back().action == oec::RecoveryAction::Failover);
+        assert(master.isDegraded());
+        assert(!master.runCycle());
+    }
+
     std::cout << "production_hardening_tests passed\n";
     return 0;
 }

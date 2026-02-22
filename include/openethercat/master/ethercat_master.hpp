@@ -41,6 +41,17 @@ class LinuxRawSocketTransport;
 class EthercatMaster {
 public:
     /**
+     * @brief Topology-policy actions for phase-3 fault handling.
+     */
+    enum class TopologyPolicyAction {
+        Monitor,
+        Retry,
+        Reconfigure,
+        Degrade,
+        FailStop
+    };
+
+    /**
      * @brief DC sync supervision policy when phase error violates thresholds.
      */
     enum class DcPolicyAction {
@@ -99,6 +110,18 @@ public:
         std::size_t maxEventHistory = 1024;
     };
     /**
+     * @brief Policy knobs for topology/hot-connect/redundancy recovery behavior.
+     */
+    struct TopologyRecoveryOptions {
+        bool enable = false;
+        std::size_t missingGraceCycles = 3;
+        std::size_t hotConnectGraceCycles = 3;
+        std::size_t redundancyGraceCycles = 2;
+        TopologyPolicyAction missingSlaveAction = TopologyPolicyAction::Degrade;
+        TopologyPolicyAction hotConnectAction = TopologyPolicyAction::Monitor;
+        TopologyPolicyAction redundancyAction = TopologyPolicyAction::Degrade;
+    };
+    /**
      * @brief Immutable record for one recovery action attempt.
      */
     struct RecoveryEvent {
@@ -152,6 +175,10 @@ public:
      * @brief Replace recovery policy options.
      */
     void setRecoveryOptions(RecoveryOptions options);
+    /**
+     * @brief Replace topology recovery policy options.
+     */
+    void setTopologyRecoveryOptions(TopologyRecoveryOptions options);
     /**
      * @brief Force a recovery action for a specific AL status code.
      */
@@ -235,6 +262,12 @@ private:
     };
 
     void setError(std::string message);
+    void configureTopologyRecoveryFromEnvironment();
+    RecoveryAction mapTopologyActionToRecoveryAction(TopologyPolicyAction action) const;
+    void applyTopologyPolicyIfNeeded(const std::vector<SlaveIdentity>& missing,
+                                     const std::vector<SlaveIdentity>& hotConnected,
+                                     bool redundancyHealthy,
+                                     std::uint64_t topologyGeneration);
     void updateDcSyncQualityLocked(std::int64_t phaseErrorNs);
     void applyDcPolicyLocked();
     void configureDcClosedLoopFromEnvironment();
@@ -272,6 +305,13 @@ private:
     std::vector<RecoveryEvent> recoveryEvents_;
     std::unordered_map<std::uint16_t, std::size_t> retryCounts_;
     std::unordered_map<std::uint16_t, std::size_t> reconfigureCounts_;
+    TopologyRecoveryOptions topologyRecoveryOptions_{};
+    std::size_t missingConditionCycles_ = 0;
+    std::size_t hotConnectConditionCycles_ = 0;
+    std::size_t redundancyConditionCycles_ = 0;
+    bool missingPolicyLatched_ = false;
+    bool hotConnectPolicyLatched_ = false;
+    bool redundancyPolicyLatched_ = false;
     bool degraded_ = false;
     std::string error_;
 };
