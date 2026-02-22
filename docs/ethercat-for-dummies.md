@@ -217,34 +217,128 @@ A coupler (e.g., EK1100) may not increment cyclic PDO WKC unless it participates
 
 ## Chapter 7: Mailbox Plane (CoE, FoE, EoE)
 
-Mailbox is acyclic service traffic. It complements, not replaces, cyclic PDO flow.
+Mailbox traffic is the acyclic control/service plane of EtherCAT. It runs alongside cyclic PDO traffic and is used for configuration, diagnostics, firmware/file operations, and tunneled Ethernet services.
 
-## 7.1 CoE
+At a high level:
 
-Used for object dictionary operations:
+- `CoE` (CANopen over EtherCAT): object dictionary access and control services.
+- `FoE` (File over EtherCAT): file-oriented transfer protocol (often firmware/config blobs).
+- `EoE` (Ethernet over EtherCAT): encapsulated Ethernet frames through the EtherCAT line.
 
-- SDO upload/download,
-- PDO assignment/mapping programming,
-- emergency objects.
+```mermaid
+flowchart LR
+    App[Application/Commissioning Tools] --> MB[Mailbox Services]
+    MB --> CoE[CoE]
+    MB --> FoE[FoE]
+    MB --> EoE[EoE]
+    CoE --> SlaveOD[Slave Object Dictionary + Emergency]
+    FoE --> SlaveFile[Slave File/Firmware Endpoint]
+    EoE --> SlaveNIC[Slave Ethernet Endpoint]
+```
 
-In this stack:
+### 7.1 Mailbox service model in this stack
 
-- `sdoUpload(...)`, `sdoDownload(...)`,
-- `configureRxPdo(...)`, `configureTxPdo(...)`,
-- emergency queue drain APIs.
+Public API surface on `EthercatMaster`:
 
-## 7.2 FoE and EoE
+- CoE:
+  - `sdoUpload(...)`, `sdoDownload(...)`
+  - `configureRxPdo(...)`, `configureTxPdo(...)`
+  - `drainEmergencies(...)`
+- FoE:
+  - `foeReadFile(...)`, `foeWriteFile(...)`
+- EoE:
+  - `eoeSendFrame(...)`, `eoeReceiveFrame(...)`
 
-- `FoE`: file transfer semantics (for example firmware payload flows).
-- `EoE`: Ethernet-over-EtherCAT encapsulated frame path.
+Implementation layering:
 
-## 7.3 Robustness behavior implemented here
+- `EthercatMaster` delegates to:
+  - `CoeMailboxService`
+  - `FoeEoeService`
+- Services delegate to `ITransport` mailbox hooks.
+- Linux raw-socket transport currently has complete CoE SDO path; FoE/EoE wire path is not yet complete there.
 
-- strict mailbox response correlation,
-- retry + backoff policy,
-- stale/unrelated frame filtering,
-- emergency frame handling during waits,
-- error class counters for KPI analysis.
+### 7.2 CoE in depth (object dictionary services)
+
+CoE is the most important mailbox protocol for runtime setup and diagnostics.
+
+Core functions:
+
+- SDO upload/download (read/write object dictionary entries),
+- PDO assignment and mapping programming (`0x1C12`, `0x1C13`, `0x16xx`, `0x1Axx`),
+- emergency object delivery.
+
+SDO transfer modes (protocol concept):
+
+- Expedited transfer: small payload embedded directly in response/request.
+- Segmented transfer: multi-frame payload with toggle-bit progression and end flag.
+
+In this stack (Linux transport):
+
+- Segmented upload/download is implemented in `linux_raw_socket_transport.cpp`.
+- Response matching uses mailbox counter + CoE/SDO context checks.
+- Unrelated frames are ignored during wait loops.
+- Emergency frames observed during SDO waits are decoded and queued.
+
+Example: SDO read/write using master facade
+
+```cpp
+const auto wr = master.sdoDownload(2, {.index = 0x2000, .subIndex = 1}, {0x11, 0x22});
+if (!wr.success) {
+    // wr.abort may contain SDO abort details
+}
+
+const auto rd = master.sdoUpload(2, {.index = 0x2000, .subIndex = 1});
+if (rd.success && rd.data.size() >= 2) {
+    // interpret rd.data
+}
+```
+
+Example: consume emergency queue
+
+```cpp
+for (const auto& emcy : master.drainEmergencies(32)) {
+    // emcy.errorCode, emcy.errorRegister, emcy.manufacturerData, emcy.slavePosition
+}
+```
+
+Conceptual segmented CoE transfer sequence:
+
+```mermaid
+sequenceDiagram
+    participant M as Master
+    participant S as Slave
+
+    M->>S: CoE SDO initiate upload/download
+    S-->>M: initiate response (expedited or segmented)
+    loop segmented payload
+        M->>S: segment request (toggle)
+        S-->>M: segment response (toggle, data, last flag)
+    end
+    M-->>M: assemble payload / report abort
+```
+
+### 7.3 CoE robustness, diagnostics, and tuning knobs
+
+Implemented hardening behavior:
+
+- mailbox status mode (`strict`, `hybrid`, `poll`),
+- retry with bounded exponential backoff,
+- stale mailbox counter drop protection,
+- parse-reject accounting,
+- abort-code reporting for SDO failures,
+- emergency queue bounds with drop counters.
+
+Useful runtime knobs:
+
+- `OEC_MAILBOX_STATUS_MODE=strict|hybrid|poll`
+- `OEC_MAILBOX_RETRIES=<N>`
+- `OEC_MAILBOX_BACKOFF_BASE_MS=<ms>`
+- `OEC_MAILBOX_BACKOFF_MAX_MS=<ms>`
+- `OEC_MAILBOX_EMERGENCY_QUEUE_LIMIT=<N>`
+
+Telemetry/KPI path:
+
+- `mailbox_soak_demo` prints mailbox diagnostics counters and supports JSON lines (`OEC_SOAK_JSON=1`) for long-run analysis.
 
 ### 7.4 PDO mapping and PDO reconfiguration (general EtherCAT behavior)
 
@@ -328,13 +422,77 @@ if (!master.configureTxPdo(2, tx, err)) {
 }
 ```
 
-### 7.7 Practical caution for reconfiguration
+### 7.7 FoE in depth (file transfer semantics)
+
+FoE is designed for file-style transfers to/from slaves, commonly used for:
+
+- firmware images,
+- device parameter files,
+- boot-time artifacts.
+
+Stack API:
+
+```cpp
+oec::FoERequest req;
+req.fileName = "firmware.bin";
+req.password = 0;
+req.maxChunkBytes = 1024;
+
+auto readRsp = master.foeReadFile(3, req);
+if (!readRsp.success) {
+    // readRsp.error
+}
+
+std::string err;
+std::vector<std::uint8_t> image{/* ... */};
+if (!master.foeWriteFile(3, req, image, err)) {
+    // err
+}
+```
+
+Current implementation status:
+
+- Mock transport: FoE read/write paths are available for integration testing.
+- Linux raw-socket transport: FoE wire integration is not yet complete and currently returns a clear "pending full ESC mailbox integration" error.
+
+### 7.8 EoE in depth (Ethernet tunneling)
+
+EoE tunnels Ethernet frames through EtherCAT mailbox channels, enabling communication with Ethernet-capable slave endpoints.
+
+Typical use cases:
+
+- commissioning traffic to embedded device Ethernet stacks,
+- diagnostics protocols that require Ethernet framing,
+- segregated maintenance channels.
+
+Stack API:
+
+```cpp
+std::vector<std::uint8_t> txFrame{/* raw Ethernet frame bytes */};
+std::string err;
+if (!master.eoeSendFrame(3, txFrame, err)) {
+    // err
+}
+
+std::vector<std::uint8_t> rxFrame;
+if (master.eoeReceiveFrame(3, rxFrame, err)) {
+    // parse Ethernet frame
+}
+```
+
+Current implementation status:
+
+- Mock transport: EoE send/receive is available for behavior testing.
+- Linux raw-socket transport: EoE wire integration is not yet complete and currently reports pending support.
+
+### 7.9 Practical caution for reconfiguration and service traffic
 
 - Reconfigure PDOs when the slave is not in full OP data exchange unless vendor docs explicitly allow it.
 - After PDO changes:
   - refresh/rebuild process image mapping as needed,
   - verify `SM2/SM3` lengths,
   - verify `LWR/LRD` WKC and actual field IO behavior.
+- Keep mailbox traffic bounded in runtime-critical loops; uncontrolled acyclic bursts can perturb deterministic cycle budgets on constrained CPUs.
 
 ---
 
