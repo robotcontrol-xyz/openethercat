@@ -19,6 +19,7 @@ This repository provides:
 - Persistent bounded recovery event history and degraded-mode state tracking.
 - CoE mailbox foundation: SDO upload/download service API, PDO mapping API, emergency queue API.
 - Linux transport CoE segmented SDO upload/download implementation over configurable mailbox windows.
+- Mailbox robustness hardening: strict SDO response matching (index/subindex + segment toggle) with filtering of unrelated CoE mailbox frames.
 - FoE/EoE service APIs (read/write file, send/receive encapsulated Ethernet frame).
 - Distributed clock sync controller with filtered offset, PI correction, and jitter stats.
 - Topology manager with hot-connect/missing detection and redundancy health checks.

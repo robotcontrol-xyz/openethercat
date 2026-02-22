@@ -80,11 +80,14 @@ public:
 
     static std::vector<std::uint8_t> buildSdoInitiateDownloadRequest(SdoAddress address,
                                                                       std::uint32_t totalSize);
+    static CoeSdoAckResponse parseSdoInitiateDownloadResponse(const std::vector<std::uint8_t>& payload,
+                                                              SdoAddress expectedAddress);
     static std::vector<std::uint8_t> buildSdoDownloadSegmentRequest(std::uint8_t toggle,
                                                                      bool lastSegment,
                                                                      const std::vector<std::uint8_t>& segmentData,
                                                                      std::size_t maxSegmentBytes);
-    static CoeSdoAckResponse parseSdoDownloadResponse(const std::vector<std::uint8_t>& payload);
+    static CoeSdoAckResponse parseSdoDownloadSegmentResponse(const std::vector<std::uint8_t>& payload,
+                                                             std::uint8_t expectedToggle);
 
 private:
     static std::uint16_t readLe16(const std::vector<std::uint8_t>& in, std::size_t offset);

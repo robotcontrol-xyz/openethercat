@@ -61,6 +61,33 @@ int main() {
         assert((req[2] & 0x01U) == 0x01U); // last segment bit
     }
 
+    // Initiate download ack parsing with strict address matching.
+    {
+        // service=0x0003, cmd=0x60, index=0x2000, sub=0x01
+        std::vector<std::uint8_t> payload = {0x03, 0x00, 0x60, 0x00, 0x20, 0x01};
+        auto ack = oec::CoeMailboxProtocol::parseSdoInitiateDownloadResponse(
+            payload, {.index = 0x2000, .subIndex = 0x01});
+        assert(ack.success);
+
+        auto mismatch = oec::CoeMailboxProtocol::parseSdoInitiateDownloadResponse(
+            payload, {.index = 0x2001, .subIndex = 0x01});
+        assert(!mismatch.success);
+        assert(mismatch.error == "SDO response address mismatch");
+    }
+
+    // Download segment ack parsing with strict toggle.
+    {
+        // service=0x0003, cmd=0x30 => segment ack with toggle=1.
+        std::vector<std::uint8_t> payload = {0x03, 0x00, 0x30};
+        auto ack = oec::CoeMailboxProtocol::parseSdoDownloadSegmentResponse(payload, 1);
+        assert(ack.success);
+        assert(ack.toggle == 1);
+
+        auto badToggle = oec::CoeMailboxProtocol::parseSdoDownloadSegmentResponse(payload, 0);
+        assert(!badToggle.success);
+        assert(badToggle.error == "SDO download segment toggle mismatch");
+    }
+
     std::cout << "coe_mailbox_protocol_tests passed\n";
     return 0;
 }

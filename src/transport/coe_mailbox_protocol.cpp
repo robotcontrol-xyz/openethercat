@@ -178,6 +178,47 @@ std::vector<std::uint8_t> CoeMailboxProtocol::buildSdoInitiateDownloadRequest(Sd
     return out;
 }
 
+CoeSdoAckResponse CoeMailboxProtocol::parseSdoInitiateDownloadResponse(
+    const std::vector<std::uint8_t>& payload,
+    SdoAddress expectedAddress) {
+    CoeSdoAckResponse response;
+    if (payload.size() < 6U) {
+        response.error = "SDO initiate download response too short";
+        return response;
+    }
+
+    const auto service = readLe16(payload, 0);
+    if (service != kCoeServiceSdoRes) {
+        response.error = "Unexpected CoE service in SDO initiate download response";
+        return response;
+    }
+
+    const auto cmd = payload[2];
+    if (cmd == kSdoCmdAbort) {
+        if (payload.size() >= 7U) {
+            response.abortCode = readLe32(payload, 3);
+        }
+        response.error = "SDO abort";
+        return response;
+    }
+
+    if (cmd != kSdoCmdDownloadInitiateRes) {
+        response.error = "Unexpected SDO command for initiate download response";
+        return response;
+    }
+
+    const auto index = readLe16(payload, 3);
+    const auto subIndex = payload[5];
+    if (index != expectedAddress.index || subIndex != expectedAddress.subIndex) {
+        response.error = "SDO response address mismatch";
+        return response;
+    }
+
+    response.success = true;
+    response.toggle = 0U;
+    return response;
+}
+
 std::vector<std::uint8_t> CoeMailboxProtocol::buildSdoDownloadSegmentRequest(std::uint8_t toggle,
                                                                               bool lastSegment,
                                                                               const std::vector<std::uint8_t>& segmentData,
@@ -196,16 +237,18 @@ std::vector<std::uint8_t> CoeMailboxProtocol::buildSdoDownloadSegmentRequest(std
     return out;
 }
 
-CoeSdoAckResponse CoeMailboxProtocol::parseSdoDownloadResponse(const std::vector<std::uint8_t>& payload) {
+CoeSdoAckResponse CoeMailboxProtocol::parseSdoDownloadSegmentResponse(
+    const std::vector<std::uint8_t>& payload,
+    std::uint8_t expectedToggle) {
     CoeSdoAckResponse response;
     if (payload.size() < 3U) {
-        response.error = "SDO download response too short";
+        response.error = "SDO download segment response too short";
         return response;
     }
 
     const auto service = readLe16(payload, 0);
     if (service != kCoeServiceSdoRes) {
-        response.error = "Unexpected CoE service in SDO download response";
+        response.error = "Unexpected CoE service in SDO download segment response";
         return response;
     }
 
@@ -218,13 +261,16 @@ CoeSdoAckResponse CoeMailboxProtocol::parseSdoDownloadResponse(const std::vector
         return response;
     }
 
-    if (((cmd & 0xE0U) != kSdoCmdDownloadInitiateRes) &&
-        ((cmd & 0xE0U) != kSdoCmdDownloadSegmentResBase)) {
-        response.error = "Unexpected SDO command for download response";
+    if ((cmd & 0xE0U) != kSdoCmdDownloadSegmentResBase) {
+        response.error = "Unexpected SDO command for download segment response";
         return response;
     }
 
     response.toggle = static_cast<std::uint8_t>((cmd >> 4U) & 0x01U);
+    if (response.toggle != (expectedToggle & 0x01U)) {
+        response.error = "SDO download segment toggle mismatch";
+        return response;
+    }
     response.success = true;
     return response;
 }

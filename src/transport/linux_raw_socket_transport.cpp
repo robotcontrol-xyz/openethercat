@@ -154,6 +154,13 @@ const char* commandName(std::uint8_t cmd) {
     }
 }
 
+bool isIgnorableSdoParseError(const std::string& error) {
+    return (error.find("Unexpected CoE service") != std::string::npos) ||
+           (error.find("Unexpected SDO command") != std::string::npos) ||
+           (error.find("address mismatch") != std::string::npos) ||
+           (error.find("toggle mismatch") != std::string::npos);
+}
+
 bool sendAndReceiveDatagram(
     int socketFd,
     int ifIndex,
@@ -727,7 +734,7 @@ bool LinuxRawSocketTransport::sdoUpload(std::uint16_t slavePosition, const SdoAd
         return true;
     };
 
-    auto mailboxRead = [&](EscMailboxFrame& outFrame) -> bool {
+    auto mailboxReadMatching = [&](auto&& accept, EscMailboxFrame& outFrame) -> bool {
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs_);
         while (std::chrono::steady_clock::now() < deadline) {
             const auto currentIndex = datagramIndex_++;
@@ -756,6 +763,10 @@ bool LinuxRawSocketTransport::sdoUpload(std::uint16_t slavePosition, const SdoAd
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
                 continue;
             }
+            if (!accept(*decoded)) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                continue;
+            }
             outFrame = *decoded;
             return true;
         }
@@ -768,10 +779,28 @@ bool LinuxRawSocketTransport::sdoUpload(std::uint16_t slavePosition, const SdoAd
     }
 
     EscMailboxFrame responseFrame;
-    if (!mailboxRead(responseFrame)) {
+    CoeSdoInitiateUploadResponse init;
+    bool fatalParseError = false;
+    std::string fatalParseReason;
+    if (!mailboxReadMatching([&](const EscMailboxFrame& frame) -> bool {
+            auto parsed = CoeMailboxProtocol::parseSdoInitiateUploadResponse(frame.payload, address);
+            if (parsed.success || parsed.error == "SDO abort") {
+                init = std::move(parsed);
+                return true;
+            }
+            if (!isIgnorableSdoParseError(parsed.error)) {
+                fatalParseError = true;
+                fatalParseReason = parsed.error;
+                return true;
+            }
+            return false;
+        }, responseFrame)) {
         return false;
     }
-    auto init = CoeMailboxProtocol::parseSdoInitiateUploadResponse(responseFrame.payload, address);
+    if (fatalParseError) {
+        outError = fatalParseReason;
+        return false;
+    }
     if (!init.success) {
         outAbortCode = init.abortCode;
         outError = init.error;
@@ -788,10 +817,32 @@ bool LinuxRawSocketTransport::sdoUpload(std::uint16_t slavePosition, const SdoAd
         if (!mailboxWrite(CoeMailboxProtocol::buildSdoUploadSegmentRequest(toggle))) {
             return false;
         }
-        if (!mailboxRead(responseFrame)) {
+        CoeSdoSegmentUploadResponse seg;
+        fatalParseError = false;
+        fatalParseReason.clear();
+        if (!mailboxReadMatching([&](const EscMailboxFrame& frame) -> bool {
+                auto parsed = CoeMailboxProtocol::parseSdoUploadSegmentResponse(frame.payload);
+                if (parsed.success && parsed.toggle == toggle) {
+                    seg = std::move(parsed);
+                    return true;
+                }
+                if (parsed.error == "SDO abort") {
+                    seg = std::move(parsed);
+                    return true;
+                }
+                if (!parsed.success && !isIgnorableSdoParseError(parsed.error)) {
+                    fatalParseError = true;
+                    fatalParseReason = parsed.error;
+                    return true;
+                }
+                return false;
+            }, responseFrame)) {
             return false;
         }
-        auto seg = CoeMailboxProtocol::parseSdoUploadSegmentResponse(responseFrame.payload);
+        if (fatalParseError) {
+            outError = fatalParseReason;
+            return false;
+        }
         if (!seg.success) {
             outAbortCode = seg.abortCode;
             outError = seg.error;
@@ -893,7 +944,7 @@ bool LinuxRawSocketTransport::sdoDownload(std::uint16_t slavePosition, const Sdo
         return true;
     };
 
-    auto mailboxRead = [&](EscMailboxFrame& outFrame) -> bool {
+    auto mailboxReadMatching = [&](auto&& accept, EscMailboxFrame& outFrame) -> bool {
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs_);
         while (std::chrono::steady_clock::now() < deadline) {
             const auto currentIndex = datagramIndex_++;
@@ -922,6 +973,10 @@ bool LinuxRawSocketTransport::sdoDownload(std::uint16_t slavePosition, const Sdo
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
                 continue;
             }
+            if (!accept(*decoded)) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                continue;
+            }
             outFrame = *decoded;
             return true;
         }
@@ -935,10 +990,28 @@ bool LinuxRawSocketTransport::sdoDownload(std::uint16_t slavePosition, const Sdo
     }
 
     EscMailboxFrame responseFrame;
-    if (!mailboxRead(responseFrame)) {
+    CoeSdoAckResponse ack;
+    bool fatalParseError = false;
+    std::string fatalParseReason;
+    if (!mailboxReadMatching([&](const EscMailboxFrame& frame) -> bool {
+            auto parsed = CoeMailboxProtocol::parseSdoInitiateDownloadResponse(frame.payload, address);
+            if (parsed.success || parsed.error == "SDO abort") {
+                ack = std::move(parsed);
+                return true;
+            }
+            if (!isIgnorableSdoParseError(parsed.error)) {
+                fatalParseError = true;
+                fatalParseReason = parsed.error;
+                return true;
+            }
+            return false;
+        }, responseFrame)) {
         return false;
     }
-    auto ack = CoeMailboxProtocol::parseSdoDownloadResponse(responseFrame.payload);
+    if (fatalParseError) {
+        outError = fatalParseReason;
+        return false;
+    }
     if (!ack.success) {
         outAbortCode = ack.abortCode;
         outError = ack.error;
@@ -958,10 +1031,27 @@ bool LinuxRawSocketTransport::sdoDownload(std::uint16_t slavePosition, const Sdo
                 toggle, lastSegment, segment, kSegmentPayloadMax))) {
             return false;
         }
-        if (!mailboxRead(responseFrame)) {
+        fatalParseError = false;
+        fatalParseReason.clear();
+        if (!mailboxReadMatching([&](const EscMailboxFrame& frame) -> bool {
+                auto parsed = CoeMailboxProtocol::parseSdoDownloadSegmentResponse(frame.payload, toggle);
+                if (parsed.success || parsed.error == "SDO abort") {
+                    ack = std::move(parsed);
+                    return true;
+                }
+                if (!isIgnorableSdoParseError(parsed.error)) {
+                    fatalParseError = true;
+                    fatalParseReason = parsed.error;
+                    return true;
+                }
+                return false;
+            }, responseFrame)) {
             return false;
         }
-        ack = CoeMailboxProtocol::parseSdoDownloadResponse(responseFrame.payload);
+        if (fatalParseError) {
+            outError = fatalParseReason;
+            return false;
+        }
         if (!ack.success) {
             outAbortCode = ack.abortCode;
             outError = ack.error;
