@@ -715,20 +715,141 @@ You want stable low tails and near-continuous lock in target operating condition
 
 Topology is not static in production: cable faults, module swaps, power cycles, hot-connect events can happen.
 
-This stack provides deterministic topology snapshots and deltas:
+This stack treats topology as a stateful, versioned data model:
 
-- `topologySnapshot()`
-- `topologyChangeSet()`
-- `topologyGeneration()`
+- `TopologySnapshot`: current discovered bus.
+- `TopologyChangeSet`: deterministic delta between previous and current snapshot.
+- `generation`: monotonic topology version for event ordering.
 
-Change set fields capture:
+```mermaid
+flowchart LR
+    Scan[Transport discoverTopology] --> Snap[TopologySnapshot]
+    Snap --> Diff[Compare previous/current by position]
+    Diff --> CS[TopologyChangeSet]
+    CS --> Gen[generation++]
+    Gen --> Policy[Master topology policy]
+```
 
-- `added` slaves,
-- `removed` slaves,
-- `updated` slave properties/state,
-- redundancy health transition.
+### 9.1 Discovery pipeline in this stack
 
-Generation gives monotonic ordering and easier event correlation.
+Discovery source in Linux transport is physical ESC probing:
+
+1. Scan contiguous slave positions using auto-increment addressing.
+2. Read AL status to determine online/state visibility.
+3. Read ESC type and ESC revision.
+4. Resolve identity (vendor/product), preferring CoE object `0x1018:01` and `0x1018:02`.
+5. If CoE identity is unavailable, fallback to SII EEPROM words.
+6. Produce `TopologySnapshot` + redundancy health.
+
+`TopologySlaveInfo` fields include:
+
+- `position`
+- `online`
+- `alStateValid`, `alState`
+- `vendorId`, `productCode`
+- `escType`, `escRevision`
+- `identityFromCoe`, `identityFromSii`
+
+Practical interpretation:
+
+- `identityFromCoe=true`: identity came from mailbox object dictionary.
+- `identityFromSii=true`: identity was recovered from EEPROM fallback.
+- neither true: identity read is unresolved and should be treated cautiously.
+
+### 9.2 Change-set semantics (how deltas are computed)
+
+`TopologyManager::refresh(...)` compares previous/current snapshots by slave position.
+
+Change categories:
+
+- `added`: present now, absent before.
+- `removed`: present before, absent now.
+- `updated`: same position, but state/identity changed.
+
+An `updated` entry is produced when one of these changes:
+
+- `online` flag,
+- `vendorId`,
+- `productCode`,
+- AL validity/state.
+
+Redundancy is tracked independently in the same change set:
+
+- `redundancyChanged`
+- `previousRedundancyHealthy`
+- `redundancyHealthy`
+
+```mermaid
+flowchart TD
+    Prev[Previous snapshot] --> CMP[Compare by position]
+    Curr[Current snapshot] --> CMP
+    CMP --> A[added]
+    CMP --> R[removed]
+    CMP --> U[updated]
+    CMP --> Red[redundancyChanged]
+    A --> Out[TopologyChangeSet]
+    R --> Out
+    U --> Out
+    Red --> Out
+```
+
+### 9.3 Why generation matters
+
+`generation` increments on every successful refresh and gives a stable event clock for topology transitions.
+
+Use it to:
+
+- correlate topology events with recovery actions,
+- avoid duplicate handling across polling loops,
+- order logs from multiple monitoring components.
+
+### 9.4 Connection to configured expected topology
+
+Topology is evaluated against your configured `NetworkConfiguration::slaves` set:
+
+- `missingSlaves()`: expected but not currently online.
+- `hotConnectedSlaves()`: online but not in expected list.
+
+This is the bridge from physical scan data to production decisions.
+
+```mermaid
+flowchart LR
+    Expected[Configured expected slaves] --> Classify[Compare with live snapshot]
+    Live[Live topology snapshot] --> Classify
+    Classify --> Missing[missingSlaves()]
+    Classify --> Hot[hotConnectedSlaves()]
+```
+
+### 9.5 API usage pattern (recommended)
+
+```cpp
+std::string err;
+if (master.refreshTopology(err)) {
+    const auto snap = master.topologySnapshot();
+    const auto delta = master.topologyChangeSet();
+    const auto gen = master.topologyGeneration();
+    const auto missing = master.missingSlaves();
+    const auto hot = master.hotConnectedSlaves();
+    (void)snap; (void)delta; (void)gen; (void)missing; (void)hot;
+} else {
+    // inspect err or master.lastError()
+}
+```
+
+Interpretation tips:
+
+- `delta.changed=false` with increasing `generation` means refresh succeeded and topology remained stable.
+- repeated `updated` on same position often indicates flapping links or unstable power.
+- large `removed` bursts usually indicate upstream cable/port failure, not simultaneous module faults.
+
+### 9.6 Tooling in this repository
+
+- `physical_topology_scan_demo`:
+  - shows discovered position table and identity source (`CoE` vs `SII`).
+- `coe_dc_topology_demo`:
+  - demonstrates topology refresh together with CoE/DC interactions.
+
+Use topology scan first during bring-up, then enable policy/recovery layers once identity and state transitions are stable.
 
 ---
 
