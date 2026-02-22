@@ -1,5 +1,7 @@
 # Build directories
 build/
+build-local/
+build-pkg/
 out/
 cmake-build-*/
 
@@ -35,3 +37,11 @@ Testing/
 
 # Docs output
 build/docs/
+
+# Packaging artifacts
+_CPack_Packages/
+*.deb
+
+# Local ad-hoc binaries produced in source tree
+beckhoff_io_demo
+examples/beckhoff_io_demo
