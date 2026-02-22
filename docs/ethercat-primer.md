@@ -194,3 +194,13 @@ If you remap channel selection in application config, verify byte/bit offsets ma
 4. Enable `OEC_TRACE_WKC=1` and ensure `LWR`/`LRD` WKC are non-zero.
 5. Enable `OEC_TRACE_OUTPUT_VERIFY=1` and check "output image matches".
 6. If RAM matches but field signal does not, inspect terminal/channel wiring and 24V field power path.
+
+## 9) DC prototype runtime knobs
+
+For `dc_hardware_sync_demo`:
+
+- `OEC_DC_SOAK_JSON=1`: emits JSON-lines progress and diagnostics.
+- `OEC_DC_MAX_CORR_STEP_NS=<N>`: absolute limit for applied DC offset correction per sample.
+- `OEC_DC_MAX_SLEW_NS=<N>`: max change between consecutive applied corrections (slew limiter).
+
+These limits help avoid aggressive correction steps while validating DC behavior on real hardware.

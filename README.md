@@ -84,6 +84,9 @@ Artifacts are emitted in `build/` as `.deb` files, one for each component.
 ./build/dc_hardware_sync_demo linux:eth0 1 500 10
 # JSON-lines mode for CI ingestion:
 OEC_SOAK_JSON=1 ./build/mailbox_soak_demo linux:eth0 1 0x1018 0x01 1000
+# DC demo JSON mode + safe correction limits:
+OEC_DC_SOAK_JSON=1 OEC_DC_MAX_CORR_STEP_NS=20000 OEC_DC_MAX_SLEW_NS=5000 \
+  ./build/dc_hardware_sync_demo linux:eth0 1 500 10
 ```
 
 The demo uses `MockTransport` so it runs without root and without EtherCAT hardware.

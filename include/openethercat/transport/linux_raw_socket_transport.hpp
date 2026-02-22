@@ -64,6 +64,20 @@ enum class MailboxErrorClass {
     Unknown
 };
 
+/**
+ * @brief DC register I/O diagnostics for LinuxRawSocketTransport.
+ */
+struct DcDiagnostics {
+    std::uint32_t schemaVersion = 1;
+    std::uint64_t readAttempts = 0;
+    std::uint64_t readSuccess = 0;
+    std::uint64_t readFailure = 0;
+    std::uint64_t readInvalidPayload = 0;
+    std::uint64_t writeAttempts = 0;
+    std::uint64_t writeSuccess = 0;
+    std::uint64_t writeFailure = 0;
+};
+
 class LinuxRawSocketTransport final : public ITransport {
 public:
     explicit LinuxRawSocketTransport(std::string ifname);
@@ -123,6 +137,8 @@ public:
     std::size_t emergencyQueueLimit() const;
     MailboxErrorClass lastMailboxErrorClass() const;
     static MailboxErrorClass classifyMailboxError(const std::string& errorText);
+    DcDiagnostics dcDiagnostics() const;
+    void resetDcDiagnostics();
 
 private:
     struct ProcessDataWindow {
@@ -160,6 +176,7 @@ private:
     MailboxStatusMode mailboxStatusMode_ = MailboxStatusMode::Hybrid;
     std::size_t emergencyQueueLimit_ = 256U;
     MailboxErrorClass lastMailboxErrorClass_ = MailboxErrorClass::None;
+    DcDiagnostics dcDiagnostics_{};
 };
 
 } // namespace oec

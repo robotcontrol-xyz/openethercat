@@ -368,6 +368,7 @@ bool LinuxRawSocketTransport::open() {
     }
     lastWorkingCounter_ = 0;
     lastMailboxErrorClass_ = MailboxErrorClass::None;
+    dcDiagnostics_ = DcDiagnostics{};
     if (!openEthercatInterfaceSocket(ifname_, socketFd_, ifIndex_, sourceMac_, error_)) {
         close();
         return false;
@@ -404,6 +405,7 @@ void LinuxRawSocketTransport::close() {
         emergencies_.pop();
     }
     lastMailboxErrorClass_ = MailboxErrorClass::None;
+    dcDiagnostics_ = DcDiagnostics{};
 }
 
 bool LinuxRawSocketTransport::exchange(const std::vector<std::uint8_t>& txProcessData,
@@ -726,9 +728,11 @@ bool LinuxRawSocketTransport::readSlaveAlStatusCode(std::uint16_t position, std:
 bool LinuxRawSocketTransport::readDcSystemTime(std::uint16_t slavePosition,
                                                std::int64_t& outSlaveTimeNs,
                                                std::string& outError) {
+    ++dcDiagnostics_.readAttempts;
     outError.clear();
     if (socketFd_ < 0) {
         outError = "transport not open";
+        ++dcDiagnostics_.readFailure;
         return false;
     }
 
@@ -745,24 +749,30 @@ bool LinuxRawSocketTransport::readDcSystemTime(std::uint16_t slavePosition,
     if (!sendAndReceiveDatagram(socketFd_, ifIndex_, timeoutMs_, maxFramesPerCycle_,
                                 expectedWorkingCounter_, destinationMac_, sourceMac_,
                                 request, wkc, payload, outError)) {
+        ++dcDiagnostics_.readFailure;
         return false;
     }
     if (payload.size() < 8U) {
         outError = "DC system time payload too short";
+        ++dcDiagnostics_.readInvalidPayload;
+        ++dcDiagnostics_.readFailure;
         return false;
     }
 
     outSlaveTimeNs = readLe64Signed(payload, 0U);
     lastWorkingCounter_ = wkc;
+    ++dcDiagnostics_.readSuccess;
     return true;
 }
 
 bool LinuxRawSocketTransport::writeDcSystemTimeOffset(std::uint16_t slavePosition,
                                                       std::int64_t offsetNs,
                                                       std::string& outError) {
+    ++dcDiagnostics_.writeAttempts;
     outError.clear();
     if (socketFd_ < 0) {
         outError = "transport not open";
+        ++dcDiagnostics_.writeFailure;
         return false;
     }
 
@@ -781,10 +791,12 @@ bool LinuxRawSocketTransport::writeDcSystemTimeOffset(std::uint16_t slavePositio
     if (!sendAndReceiveDatagram(socketFd_, ifIndex_, timeoutMs_, maxFramesPerCycle_,
                                 expectedWorkingCounter_, destinationMac_, sourceMac_,
                                 request, wkc, payload, outError)) {
+        ++dcDiagnostics_.writeFailure;
         return false;
     }
 
     lastWorkingCounter_ = wkc;
+    ++dcDiagnostics_.writeSuccess;
     return true;
 }
 
@@ -2300,5 +2312,7 @@ MailboxErrorClass LinuxRawSocketTransport::classifyMailboxError(const std::strin
     }
     return MailboxErrorClass::Unknown;
 }
+DcDiagnostics LinuxRawSocketTransport::dcDiagnostics() const { return dcDiagnostics_; }
+void LinuxRawSocketTransport::resetDcDiagnostics() { dcDiagnostics_ = DcDiagnostics{}; }
 
 } // namespace oec
