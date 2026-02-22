@@ -17,6 +17,7 @@
 #include <chrono>
 #include <thread>
 #include <map>
+#include <functional>
 
 #include <linux/if_packet.h>
 #include <net/if.h>
@@ -63,6 +64,27 @@ constexpr std::uint16_t kEepErrorMask = 0x7800;
 constexpr std::uint16_t kSiiWordVendorId = 0x0008;
 constexpr std::uint16_t kSiiWordProductCode = 0x000A;
 constexpr std::uint16_t kAlStateMask = 0x000F;
+constexpr std::uint8_t kMailboxTypeEoe = 0x02U;
+constexpr std::uint8_t kMailboxTypeFoe = 0x04U;
+constexpr std::uint16_t kFoeOpReadReq = 0x0001U;
+constexpr std::uint16_t kFoeOpWriteReq = 0x0002U;
+constexpr std::uint16_t kFoeOpData = 0x0003U;
+constexpr std::uint16_t kFoeOpAck = 0x0004U;
+constexpr std::uint16_t kFoeOpErr = 0x0005U;
+constexpr std::uint16_t kFoeOpBusy = 0x0006U;
+
+bool sendAndReceiveDatagram(
+    int socketFd,
+    int ifIndex,
+    int timeoutMs,
+    std::size_t maxFramesPerCycle,
+    std::uint16_t expectedWorkingCounter,
+    std::array<std::uint8_t, 6>& destinationMac,
+    std::array<std::uint8_t, 6>& sourceMac,
+    const EthercatDatagramRequest& request,
+    std::uint16_t& outWkc,
+    std::vector<std::uint8_t>& outPayload,
+    std::string& outError);
 
 bool openEthercatInterfaceSocket(const std::string& ifname,
                                  int& outSocketFd,
@@ -217,6 +239,135 @@ void sleepMailboxBackoff(int attempt, int baseDelayMs, int maxDelayMs) {
     const auto shift = std::min(attempt, 10);
     const auto delay = std::min(maxDelayMs, baseDelayMs << shift);
     std::this_thread::sleep_for(std::chrono::milliseconds(std::max(1, delay)));
+}
+
+std::uint16_t readLe16Raw(const std::vector<std::uint8_t>& in, std::size_t offset) {
+    return static_cast<std::uint16_t>(static_cast<std::uint16_t>(in[offset]) |
+                                      (static_cast<std::uint16_t>(in[offset + 1]) << 8U));
+}
+
+std::uint32_t readLe32Raw(const std::vector<std::uint8_t>& in, std::size_t offset) {
+    return static_cast<std::uint32_t>(static_cast<std::uint32_t>(in[offset]) |
+                                      (static_cast<std::uint32_t>(in[offset + 1]) << 8U) |
+                                      (static_cast<std::uint32_t>(in[offset + 2]) << 16U) |
+                                      (static_cast<std::uint32_t>(in[offset + 3]) << 24U));
+}
+
+void appendLe16Raw(std::vector<std::uint8_t>& out, std::uint16_t value) {
+    out.push_back(static_cast<std::uint8_t>(value & 0xFFU));
+    out.push_back(static_cast<std::uint8_t>((value >> 8U) & 0xFFU));
+}
+
+void appendLe32Raw(std::vector<std::uint8_t>& out, std::uint32_t value) {
+    out.push_back(static_cast<std::uint8_t>(value & 0xFFU));
+    out.push_back(static_cast<std::uint8_t>((value >> 8U) & 0xFFU));
+    out.push_back(static_cast<std::uint8_t>((value >> 16U) & 0xFFU));
+    out.push_back(static_cast<std::uint8_t>((value >> 24U) & 0xFFU));
+}
+
+bool readMailboxSmWindow(int socketFd,
+                         int ifIndex,
+                         int timeoutMs,
+                         std::size_t maxFramesPerCycle,
+                         std::uint16_t expectedWorkingCounter,
+                         std::array<std::uint8_t, 6>& destinationMac,
+                         std::array<std::uint8_t, 6>& sourceMac,
+                         std::uint8_t& datagramIndex,
+                         std::uint16_t adp,
+                         std::uint8_t smIndex,
+                         std::uint16_t& outStart,
+                         std::uint16_t& outLen,
+                         std::string& outError) {
+    const auto currentIndex = datagramIndex++;
+    EthercatDatagramRequest req;
+    req.command = kCommandAprd;
+    req.datagramIndex = currentIndex;
+    req.adp = adp;
+    req.ado = static_cast<std::uint16_t>(kRegisterSmBase + (smIndex * 8U));
+    req.payload.assign(8U, 0U);
+
+    std::uint16_t wkc = 0;
+    std::vector<std::uint8_t> payload;
+    if (!sendAndReceiveDatagram(socketFd, ifIndex, timeoutMs, maxFramesPerCycle,
+                                expectedWorkingCounter, destinationMac, sourceMac,
+                                req, wkc, payload, outError)) {
+        return false;
+    }
+    if (payload.size() < 4U) {
+        outError = "SM payload too short for mailbox";
+        return false;
+    }
+    outStart = readLe16Raw(payload, 0U);
+    outLen = readLe16Raw(payload, 2U);
+    return true;
+}
+
+bool mailboxApwr(int socketFd,
+                 int ifIndex,
+                 int timeoutMs,
+                 std::size_t maxFramesPerCycle,
+                 std::uint16_t expectedWorkingCounter,
+                 std::array<std::uint8_t, 6>& destinationMac,
+                 std::array<std::uint8_t, 6>& sourceMac,
+                 std::uint8_t& datagramIndex,
+                 std::uint16_t adp,
+                 std::uint16_t ado,
+                 const std::vector<std::uint8_t>& payload,
+                 std::string& outError,
+                 std::uint16_t* outWkc = nullptr) {
+    const auto currentIndex = datagramIndex++;
+    EthercatDatagramRequest req;
+    req.command = kCommandApwr;
+    req.datagramIndex = currentIndex;
+    req.adp = adp;
+    req.ado = ado;
+    req.payload = payload;
+
+    std::uint16_t wkc = 0;
+    std::vector<std::uint8_t> rx;
+    if (!sendAndReceiveDatagram(socketFd, ifIndex, timeoutMs, maxFramesPerCycle,
+                                expectedWorkingCounter, destinationMac, sourceMac,
+                                req, wkc, rx, outError)) {
+        return false;
+    }
+    if (outWkc != nullptr) {
+        *outWkc = wkc;
+    }
+    return true;
+}
+
+bool mailboxAprd(int socketFd,
+                 int ifIndex,
+                 int timeoutMs,
+                 std::size_t maxFramesPerCycle,
+                 std::uint16_t expectedWorkingCounter,
+                 std::array<std::uint8_t, 6>& destinationMac,
+                 std::array<std::uint8_t, 6>& sourceMac,
+                 std::uint8_t& datagramIndex,
+                 std::uint16_t adp,
+                 std::uint16_t ado,
+                 std::size_t size,
+                 std::vector<std::uint8_t>& outPayload,
+                 std::string& outError,
+                 std::uint16_t* outWkc = nullptr) {
+    const auto currentIndex = datagramIndex++;
+    EthercatDatagramRequest req;
+    req.command = kCommandAprd;
+    req.datagramIndex = currentIndex;
+    req.adp = adp;
+    req.ado = ado;
+    req.payload.assign(size, 0U);
+
+    std::uint16_t wkc = 0;
+    if (!sendAndReceiveDatagram(socketFd, ifIndex, timeoutMs, maxFramesPerCycle,
+                                expectedWorkingCounter, destinationMac, sourceMac,
+                                req, wkc, outPayload, outError)) {
+        return false;
+    }
+    if (outWkc != nullptr) {
+        *outWkc = wkc;
+    }
+    return true;
 }
 
 std::int64_t readLe64Signed(const std::vector<std::uint8_t>& data, std::size_t offset) {
@@ -2232,36 +2383,466 @@ bool LinuxRawSocketTransport::configureProcessImage(const NetworkConfiguration& 
 
 bool LinuxRawSocketTransport::foeRead(std::uint16_t slavePosition, const FoERequest& request,
                                       FoEResponse& outResponse, std::string& outError) {
-    (void)slavePosition;
-    (void)request;
-    outResponse.success = false;
-    outResponse.error = "FoE over mailbox for LinuxRawSocketTransport is pending full ESC mailbox integration";
-    outError = outResponse.error;
-    return false;
+    outResponse = FoEResponse{};
+    outError.clear();
+    if (socketFd_ < 0) {
+        outError = "transport not open";
+        outResponse.error = outError;
+        return false;
+    }
+
+    const auto adp = toAutoIncrementAddress(slavePosition);
+    std::uint16_t writeOffset = mailboxWriteOffset_;
+    std::uint16_t writeSize = mailboxWriteSize_;
+    std::uint16_t readOffset = mailboxReadOffset_;
+    std::uint16_t readSize = mailboxReadSize_;
+    std::uint16_t sm0Start = 0U;
+    std::uint16_t sm0Len = 0U;
+    std::uint16_t sm1Start = 0U;
+    std::uint16_t sm1Len = 0U;
+    if (readMailboxSmWindow(socketFd_, ifIndex_, timeoutMs_, maxFramesPerCycle_,
+                            expectedWorkingCounter_, destinationMac_, sourceMac_,
+                            datagramIndex_, adp, 0U, sm0Start, sm0Len, outError) &&
+        readMailboxSmWindow(socketFd_, ifIndex_, timeoutMs_, maxFramesPerCycle_,
+                            expectedWorkingCounter_, destinationMac_, sourceMac_,
+                            datagramIndex_, adp, 1U, sm1Start, sm1Len, outError) &&
+        sm0Len > 0U && sm1Len > 0U) {
+        writeOffset = sm0Start;
+        writeSize = sm0Len;
+        readOffset = sm1Start;
+        readSize = sm1Len;
+    }
+
+    auto mailboxWrite = [&](std::uint8_t type, const std::vector<std::uint8_t>& payload,
+                            std::uint8_t& outCounter) -> bool {
+        EscMailboxFrame frame;
+        frame.channel = 0U;
+        frame.priority = 0U;
+        frame.type = type;
+        frame.counter = static_cast<std::uint8_t>(mailboxCounter_++ & 0x07U);
+        outCounter = frame.counter;
+        frame.payload = payload;
+        auto bytes = CoeMailboxProtocol::encodeEscMailbox(frame);
+        if (bytes.size() > writeSize) {
+            outError = "FoE request exceeds mailbox write window";
+            return false;
+        }
+        bytes.resize(writeSize, 0U);
+        std::uint16_t wkc = 0;
+        if (!mailboxApwr(socketFd_, ifIndex_, timeoutMs_, maxFramesPerCycle_,
+                         expectedWorkingCounter_, destinationMac_, sourceMac_,
+                         datagramIndex_, adp, writeOffset, bytes, outError, &wkc)) {
+            return false;
+        }
+        lastWorkingCounter_ = wkc;
+        ++mailboxDiagnostics_.mailboxWrites;
+        return true;
+    };
+
+    auto mailboxReadExpected = [&](std::uint8_t expectedCounter,
+                                   std::uint8_t expectedType,
+                                   EscMailboxFrame& outFrame) -> bool {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs_);
+        while (std::chrono::steady_clock::now() < deadline) {
+            std::vector<std::uint8_t> payload;
+            std::uint16_t wkc = 0;
+            if (!mailboxAprd(socketFd_, ifIndex_, timeoutMs_, maxFramesPerCycle_,
+                             expectedWorkingCounter_, destinationMac_, sourceMac_,
+                             datagramIndex_, adp, readOffset, readSize, payload, outError, &wkc)) {
+                return false;
+            }
+            lastWorkingCounter_ = wkc;
+            ++mailboxDiagnostics_.mailboxReads;
+            auto decoded = CoeMailboxProtocol::decodeEscMailbox(payload);
+            if (!decoded) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                continue;
+            }
+            // Drain CoE emergency frames if they appear interleaved.
+            if (decoded->type == CoeMailboxProtocol::kMailboxTypeCoe) {
+                EmergencyMessage emergency {};
+                if (CoeMailboxProtocol::parseEmergency(decoded->payload, slavePosition, emergency)) {
+                    if (emergencies_.size() >= emergencyQueueLimit_) {
+                        emergencies_.pop();
+                        ++mailboxDiagnostics_.emergencyDropped;
+                    }
+                    emergencies_.push(emergency);
+                    ++mailboxDiagnostics_.emergencyQueued;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                continue;
+            }
+            if (decoded->type != expectedType) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                continue;
+            }
+            if ((decoded->counter & 0x07U) != (expectedCounter & 0x07U)) {
+                ++mailboxDiagnostics_.staleCounterDrops;
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                continue;
+            }
+            outFrame = *decoded;
+            ++mailboxDiagnostics_.matchedResponses;
+            return true;
+        }
+        outError = "Timed out waiting for FoE mailbox response";
+        ++mailboxDiagnostics_.mailboxTimeouts;
+        return false;
+    };
+
+    std::vector<std::uint8_t> rrq;
+    rrq.reserve(8U + request.fileName.size() + 1U);
+    appendLe16Raw(rrq, kFoeOpReadReq);
+    appendLe32Raw(rrq, request.password);
+    rrq.insert(rrq.end(), request.fileName.begin(), request.fileName.end());
+    rrq.push_back('\0');
+
+    std::uint8_t expectedCounter = 0U;
+    if (!mailboxWrite(kMailboxTypeFoe, rrq, expectedCounter)) {
+        outResponse.error = outError;
+        return false;
+    }
+
+    const std::size_t maxDataPerPacket =
+        (readSize > 12U) ? (readSize - 12U) : std::max<std::size_t>(16U, request.maxChunkBytes);
+    std::uint32_t expectedPacket = 1U;
+    while (true) {
+        EscMailboxFrame frame;
+        if (!mailboxReadExpected(expectedCounter, kMailboxTypeFoe, frame)) {
+            outResponse.error = outError;
+            return false;
+        }
+        if (frame.payload.size() < 2U) {
+            outError = "FoE response payload too short";
+            outResponse.error = outError;
+            return false;
+        }
+        const auto op = readLe16Raw(frame.payload, 0U);
+        if (op == kFoeOpErr) {
+            const auto errCode = (frame.payload.size() >= 6U) ? readLe32Raw(frame.payload, 2U) : 0U;
+            outError = "FoE error response code=0x" + std::to_string(errCode);
+            outResponse.error = outError;
+            return false;
+        }
+        if (op == kFoeOpBusy) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            continue;
+        }
+        if (op != kFoeOpData || frame.payload.size() < 6U) {
+            outError = "Unexpected FoE response opcode";
+            outResponse.error = outError;
+            return false;
+        }
+
+        const auto packetNo = readLe32Raw(frame.payload, 2U);
+        if (packetNo != expectedPacket) {
+            outError = "FoE packet sequence mismatch";
+            outResponse.error = outError;
+            return false;
+        }
+        const std::vector<std::uint8_t> chunk(frame.payload.begin() + 6, frame.payload.end());
+        outResponse.data.insert(outResponse.data.end(), chunk.begin(), chunk.end());
+
+        std::vector<std::uint8_t> ack;
+        ack.reserve(6U);
+        appendLe16Raw(ack, kFoeOpAck);
+        appendLe32Raw(ack, packetNo);
+        if (!mailboxWrite(kMailboxTypeFoe, ack, expectedCounter)) {
+            outResponse.error = outError;
+            return false;
+        }
+        ++expectedPacket;
+
+        if (chunk.size() < maxDataPerPacket) {
+            outResponse.success = true;
+            outResponse.error.clear();
+            return true;
+        }
+    }
 }
 
 bool LinuxRawSocketTransport::foeWrite(std::uint16_t slavePosition, const FoERequest& request,
                                        const std::vector<std::uint8_t>& data, std::string& outError) {
-    (void)slavePosition;
-    (void)request;
-    (void)data;
-    outError = "FoE over mailbox for LinuxRawSocketTransport is pending full ESC mailbox integration";
-    return false;
+    outError.clear();
+    if (socketFd_ < 0) {
+        outError = "transport not open";
+        return false;
+    }
+
+    const auto adp = toAutoIncrementAddress(slavePosition);
+    std::uint16_t writeOffset = mailboxWriteOffset_;
+    std::uint16_t writeSize = mailboxWriteSize_;
+    std::uint16_t readOffset = mailboxReadOffset_;
+    std::uint16_t readSize = mailboxReadSize_;
+    std::uint16_t sm0Start = 0U;
+    std::uint16_t sm0Len = 0U;
+    std::uint16_t sm1Start = 0U;
+    std::uint16_t sm1Len = 0U;
+    if (readMailboxSmWindow(socketFd_, ifIndex_, timeoutMs_, maxFramesPerCycle_,
+                            expectedWorkingCounter_, destinationMac_, sourceMac_,
+                            datagramIndex_, adp, 0U, sm0Start, sm0Len, outError) &&
+        readMailboxSmWindow(socketFd_, ifIndex_, timeoutMs_, maxFramesPerCycle_,
+                            expectedWorkingCounter_, destinationMac_, sourceMac_,
+                            datagramIndex_, adp, 1U, sm1Start, sm1Len, outError) &&
+        sm0Len > 0U && sm1Len > 0U) {
+        writeOffset = sm0Start;
+        writeSize = sm0Len;
+        readOffset = sm1Start;
+        readSize = sm1Len;
+    }
+
+    auto mailboxWrite = [&](std::uint8_t type, const std::vector<std::uint8_t>& payload,
+                            std::uint8_t& outCounter) -> bool {
+        EscMailboxFrame frame;
+        frame.channel = 0U;
+        frame.priority = 0U;
+        frame.type = type;
+        frame.counter = static_cast<std::uint8_t>(mailboxCounter_++ & 0x07U);
+        outCounter = frame.counter;
+        frame.payload = payload;
+        auto bytes = CoeMailboxProtocol::encodeEscMailbox(frame);
+        if (bytes.size() > writeSize) {
+            outError = "FoE request exceeds mailbox write window";
+            return false;
+        }
+        bytes.resize(writeSize, 0U);
+        std::uint16_t wkc = 0;
+        if (!mailboxApwr(socketFd_, ifIndex_, timeoutMs_, maxFramesPerCycle_,
+                         expectedWorkingCounter_, destinationMac_, sourceMac_,
+                         datagramIndex_, adp, writeOffset, bytes, outError, &wkc)) {
+            return false;
+        }
+        lastWorkingCounter_ = wkc;
+        ++mailboxDiagnostics_.mailboxWrites;
+        return true;
+    };
+
+    auto mailboxReadExpected = [&](std::uint8_t expectedCounter,
+                                   std::uint8_t expectedType,
+                                   EscMailboxFrame& outFrame) -> bool {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs_);
+        while (std::chrono::steady_clock::now() < deadline) {
+            std::vector<std::uint8_t> payload;
+            std::uint16_t wkc = 0;
+            if (!mailboxAprd(socketFd_, ifIndex_, timeoutMs_, maxFramesPerCycle_,
+                             expectedWorkingCounter_, destinationMac_, sourceMac_,
+                             datagramIndex_, adp, readOffset, readSize, payload, outError, &wkc)) {
+                return false;
+            }
+            lastWorkingCounter_ = wkc;
+            ++mailboxDiagnostics_.mailboxReads;
+            auto decoded = CoeMailboxProtocol::decodeEscMailbox(payload);
+            if (!decoded) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                continue;
+            }
+            if (decoded->type != expectedType) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                continue;
+            }
+            if ((decoded->counter & 0x07U) != (expectedCounter & 0x07U)) {
+                ++mailboxDiagnostics_.staleCounterDrops;
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                continue;
+            }
+            outFrame = *decoded;
+            ++mailboxDiagnostics_.matchedResponses;
+            return true;
+        }
+        outError = "Timed out waiting for FoE mailbox response";
+        ++mailboxDiagnostics_.mailboxTimeouts;
+        return false;
+    };
+
+    std::vector<std::uint8_t> wrq;
+    wrq.reserve(8U + request.fileName.size() + 1U);
+    appendLe16Raw(wrq, kFoeOpWriteReq);
+    appendLe32Raw(wrq, request.password);
+    wrq.insert(wrq.end(), request.fileName.begin(), request.fileName.end());
+    wrq.push_back('\0');
+
+    std::uint8_t expectedCounter = 0U;
+    if (!mailboxWrite(kMailboxTypeFoe, wrq, expectedCounter)) {
+        return false;
+    }
+
+    EscMailboxFrame frame;
+    if (!mailboxReadExpected(expectedCounter, kMailboxTypeFoe, frame)) {
+        return false;
+    }
+    if (frame.payload.size() < 2U) {
+        outError = "FoE response payload too short";
+        return false;
+    }
+    auto op = readLe16Raw(frame.payload, 0U);
+    if (op == kFoeOpErr) {
+        outError = "FoE write request rejected";
+        return false;
+    }
+    if (op != kFoeOpAck) {
+        outError = "Expected FoE ACK after WRQ";
+        return false;
+    }
+
+    const std::size_t maxDataBytes = (writeSize > 12U)
+        ? std::min<std::size_t>(request.maxChunkBytes, writeSize - 12U)
+        : std::min<std::size_t>(request.maxChunkBytes, 256U);
+    std::size_t cursor = 0U;
+    std::uint32_t packetNo = 1U;
+    while (cursor < data.size() || (data.empty() && packetNo == 1U)) {
+        const auto remaining = (cursor < data.size()) ? (data.size() - cursor) : 0U;
+        const auto chunkBytes = std::min<std::size_t>(maxDataBytes, remaining);
+        std::vector<std::uint8_t> payload;
+        payload.reserve(6U + chunkBytes);
+        appendLe16Raw(payload, kFoeOpData);
+        appendLe32Raw(payload, packetNo);
+        if (chunkBytes > 0U) {
+            payload.insert(payload.end(), data.begin() + static_cast<std::ptrdiff_t>(cursor),
+                           data.begin() + static_cast<std::ptrdiff_t>(cursor + chunkBytes));
+        }
+
+        if (!mailboxWrite(kMailboxTypeFoe, payload, expectedCounter)) {
+            return false;
+        }
+
+        frame = EscMailboxFrame{};
+        if (!mailboxReadExpected(expectedCounter, kMailboxTypeFoe, frame)) {
+            return false;
+        }
+        if (frame.payload.size() < 2U) {
+            outError = "FoE ACK payload too short";
+            return false;
+        }
+        op = readLe16Raw(frame.payload, 0U);
+        if (op == kFoeOpErr) {
+            outError = "FoE data packet rejected";
+            return false;
+        }
+        if (op != kFoeOpAck || frame.payload.size() < 6U) {
+            outError = "Expected FoE ACK for data packet";
+            return false;
+        }
+        const auto ackPacket = readLe32Raw(frame.payload, 2U);
+        if (ackPacket != packetNo) {
+            outError = "FoE ACK packet mismatch";
+            return false;
+        }
+
+        cursor += chunkBytes;
+        ++packetNo;
+        if (chunkBytes < maxDataBytes) {
+            break;
+        }
+    }
+    return true;
 }
 
 bool LinuxRawSocketTransport::eoeSend(std::uint16_t slavePosition, const std::vector<std::uint8_t>& frame,
                                       std::string& outError) {
-    (void)slavePosition;
-    (void)frame;
-    outError = "EoE over mailbox for LinuxRawSocketTransport is pending full ESC mailbox integration";
-    return false;
+    outError.clear();
+    if (socketFd_ < 0) {
+        outError = "transport not open";
+        return false;
+    }
+    const auto adp = toAutoIncrementAddress(slavePosition);
+    std::uint16_t writeOffset = mailboxWriteOffset_;
+    std::uint16_t writeSize = mailboxWriteSize_;
+    std::uint16_t readOffset = mailboxReadOffset_;
+    std::uint16_t readSize = mailboxReadSize_;
+    std::uint16_t sm0Start = 0U;
+    std::uint16_t sm0Len = 0U;
+    std::uint16_t sm1Start = 0U;
+    std::uint16_t sm1Len = 0U;
+    if (readMailboxSmWindow(socketFd_, ifIndex_, timeoutMs_, maxFramesPerCycle_,
+                            expectedWorkingCounter_, destinationMac_, sourceMac_,
+                            datagramIndex_, adp, 0U, sm0Start, sm0Len, outError) &&
+        readMailboxSmWindow(socketFd_, ifIndex_, timeoutMs_, maxFramesPerCycle_,
+                            expectedWorkingCounter_, destinationMac_, sourceMac_,
+                            datagramIndex_, adp, 1U, sm1Start, sm1Len, outError) &&
+        sm0Len > 0U && sm1Len > 0U) {
+        writeOffset = sm0Start;
+        writeSize = sm0Len;
+        readOffset = sm1Start;
+        readSize = sm1Len;
+    }
+    (void)readOffset;
+    (void)readSize;
+
+    EscMailboxFrame eoe;
+    eoe.channel = 0U;
+    eoe.priority = 0U;
+    eoe.type = kMailboxTypeEoe;
+    eoe.counter = static_cast<std::uint8_t>(mailboxCounter_++ & 0x07U);
+    eoe.payload = frame;
+    auto bytes = CoeMailboxProtocol::encodeEscMailbox(eoe);
+    if (bytes.size() > writeSize) {
+        outError = "EoE frame exceeds mailbox write window";
+        return false;
+    }
+    bytes.resize(writeSize, 0U);
+    std::uint16_t wkc = 0;
+    if (!mailboxApwr(socketFd_, ifIndex_, timeoutMs_, maxFramesPerCycle_,
+                     expectedWorkingCounter_, destinationMac_, sourceMac_,
+                     datagramIndex_, adp, writeOffset, bytes, outError, &wkc)) {
+        return false;
+    }
+    lastWorkingCounter_ = wkc;
+    ++mailboxDiagnostics_.mailboxWrites;
+    return true;
 }
 
 bool LinuxRawSocketTransport::eoeReceive(std::uint16_t slavePosition, std::vector<std::uint8_t>& frame,
                                          std::string& outError) {
-    (void)slavePosition;
-    (void)frame;
-    outError = "EoE over mailbox for LinuxRawSocketTransport is pending full ESC mailbox integration";
+    frame.clear();
+    outError.clear();
+    if (socketFd_ < 0) {
+        outError = "transport not open";
+        return false;
+    }
+    const auto adp = toAutoIncrementAddress(slavePosition);
+    std::uint16_t readOffset = mailboxReadOffset_;
+    std::uint16_t readSize = mailboxReadSize_;
+    std::uint16_t sm1Start = 0U;
+    std::uint16_t sm1Len = 0U;
+    std::uint16_t dummyStart = 0U;
+    std::uint16_t dummyLen = 0U;
+    if (readMailboxSmWindow(socketFd_, ifIndex_, timeoutMs_, maxFramesPerCycle_,
+                            expectedWorkingCounter_, destinationMac_, sourceMac_,
+                            datagramIndex_, adp, 0U, dummyStart, dummyLen, outError) &&
+        readMailboxSmWindow(socketFd_, ifIndex_, timeoutMs_, maxFramesPerCycle_,
+                            expectedWorkingCounter_, destinationMac_, sourceMac_,
+                            datagramIndex_, adp, 1U, sm1Start, sm1Len, outError) &&
+        sm1Len > 0U) {
+        readOffset = sm1Start;
+        readSize = sm1Len;
+    }
+
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs_);
+    while (std::chrono::steady_clock::now() < deadline) {
+        std::vector<std::uint8_t> payload;
+        std::uint16_t wkc = 0;
+        if (!mailboxAprd(socketFd_, ifIndex_, timeoutMs_, maxFramesPerCycle_,
+                         expectedWorkingCounter_, destinationMac_, sourceMac_,
+                         datagramIndex_, adp, readOffset, readSize, payload, outError, &wkc)) {
+            return false;
+        }
+        lastWorkingCounter_ = wkc;
+        ++mailboxDiagnostics_.mailboxReads;
+        auto decoded = CoeMailboxProtocol::decodeEscMailbox(payload);
+        if (!decoded) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            continue;
+        }
+        if (decoded->type != kMailboxTypeEoe) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            continue;
+        }
+        frame = decoded->payload;
+        ++mailboxDiagnostics_.matchedResponses;
+        return true;
+    }
+    outError = "Timed out waiting for EoE mailbox frame";
+    ++mailboxDiagnostics_.mailboxTimeouts;
     return false;
 }
 

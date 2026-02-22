@@ -36,7 +36,7 @@ This repository provides:
 This is an architectural foundation and demonstration.
 Implemented now: startup state sequence to OP, per-slave diagnostics/recovery, CoE service APIs, DC correction algorithm, and topology/redundancy management APIs.
 Implemented now (Linux transport): raw EtherCAT cyclic exchange, AL state/control/status access, per-slave state/status reads, segmented CoE SDO upload/download with mailbox polling, basic topology scanning by station position, and primary/secondary link failover for cyclic frames.
-Still pending for hard real-world production: full CoE mailbox coverage beyond SDO basics (complete mailbox status handling across ESC variants), FoE/EoE wire-format transport implementation, distributed-clock hardware timestamp/DC-register closed-loop wiring, exhaustive topology discovery across diverse ESCs, full redundancy switchover datapath validation under load, and long-duration real-HIL validation campaigns.
+Still pending for hard real-world production: full CoE mailbox coverage beyond SDO basics (complete mailbox status handling across ESC variants), FoE/EoE protocol-conformance hardening (full interoperability/fragmentation coverage), distributed-clock hardware timestamp/DC-register closed-loop wiring, exhaustive topology discovery across diverse ESCs, full redundancy switchover datapath validation under load, and long-duration real-HIL validation campaigns.
 
 ## Build
 
@@ -86,6 +86,7 @@ Artifacts are emitted in `build/` as `.deb` files, one for each component.
 ./build/dc_hardware_sync_demo linux:eth0 1 500 10
 ./build/dc_soak_demo linux:eth0 600 1000
 ./build/topology_to_eni_dump linux:eth0 generated_discovery.eni.xml 1 1
+./build/foe_eoe_smoke_demo mock 1
 # JSON-lines mode for CI ingestion:
 OEC_SOAK_JSON=1 ./build/mailbox_soak_demo linux:eth0 1 0x1018 0x01 1000
 # DC demo JSON mode + safe correction limits:
@@ -238,7 +239,7 @@ sudo OEC_TRACE_MAP=1 OEC_TRACE_WKC=1 OEC_TRACE_OUTPUT_VERIFY=1 \
 
 - Add new drivers by implementing `ITransport`.
 - Expand ENI/ESI support with schema-accurate parsing and generated bindings.
-- Complete Linux raw-socket mailbox transport implementation and add FoE/EoE.
+- Harden Linux raw-socket mailbox FoE/EoE interoperability and conformance coverage.
 - Wire distributed-clock correction to hardware timing registers and NIC clock sources.
 - Add physical-line topology scan/redundancy switchover handling.
 - Run long-duration HIL soak/conformance matrix on real slave chains.

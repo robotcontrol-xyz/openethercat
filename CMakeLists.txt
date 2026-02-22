@@ -108,6 +108,9 @@ if(OEC_BUILD_EXAMPLES)
 
     add_executable(topology_to_eni_dump diagnostics/topology_to_eni_dump.cpp)
     target_link_libraries(topology_to_eni_dump PRIVATE openethercat)
+
+    add_executable(foe_eoe_smoke_demo diagnostics/foe_eoe_smoke_demo.cpp)
+    target_link_libraries(foe_eoe_smoke_demo PRIVATE openethercat)
 endif()
 
 if(OEC_BUILD_TESTS)

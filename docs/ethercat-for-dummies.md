@@ -255,7 +255,8 @@ Implementation layering:
   - `CoeMailboxService`
   - `FoeEoeService`
 - Services delegate to `ITransport` mailbox hooks.
-- Linux raw-socket transport currently has complete CoE SDO path; FoE/EoE wire path is not yet complete there.
+- Linux raw-socket transport currently has complete CoE SDO path and a baseline FoE/EoE mailbox wire path.
+- Full FoE/EoE interoperability hardening (broad device matrix + advanced fragmentation/conformance cases) remains a roadmap item.
 
 ### 7.2 CoE in depth (object dictionary services)
 
@@ -453,7 +454,8 @@ if (!master.foeWriteFile(3, req, image, err)) {
 Current implementation status:
 
 - Mock transport: FoE read/write paths are available for integration testing.
-- Linux raw-socket transport: FoE wire integration is not yet complete and currently returns a clear "pending full ESC mailbox integration" error.
+- Linux raw-socket transport: baseline FoE mailbox read/write path is implemented.
+- Current caveat: treat it as early-interoperability support and validate against target slave profiles.
 
 ### 7.8 EoE in depth (Ethernet tunneling)
 
@@ -483,7 +485,8 @@ if (master.eoeReceiveFrame(3, rxFrame, err)) {
 Current implementation status:
 
 - Mock transport: EoE send/receive is available for behavior testing.
-- Linux raw-socket transport: EoE wire integration is not yet complete and currently reports pending support.
+- Linux raw-socket transport: baseline EoE mailbox send/receive path is implemented.
+- Current caveat: advanced interoperability/fragmentation behavior should be validated per target device.
 
 ### 7.9 Practical caution for reconfiguration and service traffic
 

@@ -92,11 +92,11 @@ Status: In progress (software validation harness complete; physical switchover c
 
 ## Phase 4: Protocol breadth and device compatibility
 
-Status: Not started for full breadth.
+Status: In progress (baseline FoE/EoE Linux wire path implemented; conformance breadth pending).
 
 ### Scope
 
-1. FoE/EoE wire implementations in Linux transport.
+1. FoE/EoE protocol-conformance hardening in Linux transport.
 2. Broader device compatibility matrix:
 - Beckhoff IO + bridge terminals (existing baseline).
 - Additional vendor slaves (I/O and drive classes).
@@ -104,7 +104,7 @@ Status: Not started for full breadth.
 
 ### Deliverables
 
-- FoE/EoE transport support with tests.
+- FoE/EoE transport support with interoperability and fragmentation tests.
 - Compatibility matrix document with pass/fail and notes.
 
 ### Acceptance gate
