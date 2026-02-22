@@ -31,6 +31,13 @@ struct MailboxDiagnostics {
     std::uint64_t emergencyQueued = 0;
     std::uint64_t emergencyDropped = 0;
     std::uint64_t matchedResponses = 0;
+    std::uint64_t errorTimeout = 0;
+    std::uint64_t errorBusy = 0;
+    std::uint64_t errorParseReject = 0;
+    std::uint64_t errorStaleCounter = 0;
+    std::uint64_t errorAbort = 0;
+    std::uint64_t errorTransportIo = 0;
+    std::uint64_t errorUnknown = 0;
 };
 
 /**
@@ -40,6 +47,20 @@ enum class MailboxStatusMode {
     Strict,
     Hybrid,
     Poll
+};
+
+/**
+ * @brief Mailbox transaction error classes for diagnostics and KPI reporting.
+ */
+enum class MailboxErrorClass {
+    None,
+    Timeout,
+    Busy,
+    ParseReject,
+    StaleCounter,
+    Abort,
+    TransportIo,
+    Unknown
 };
 
 class LinuxRawSocketTransport final : public ITransport {
@@ -97,6 +118,8 @@ public:
     MailboxStatusMode mailboxStatusMode() const;
     void setEmergencyQueueLimit(std::size_t limit);
     std::size_t emergencyQueueLimit() const;
+    MailboxErrorClass lastMailboxErrorClass() const;
+    static MailboxErrorClass classifyMailboxError(const std::string& errorText);
 
 private:
     struct ProcessDataWindow {
@@ -133,6 +156,7 @@ private:
     MailboxDiagnostics mailboxDiagnostics_{};
     MailboxStatusMode mailboxStatusMode_ = MailboxStatusMode::Hybrid;
     std::size_t emergencyQueueLimit_ = 256U;
+    MailboxErrorClass lastMailboxErrorClass_ = MailboxErrorClass::None;
 };
 
 } // namespace oec

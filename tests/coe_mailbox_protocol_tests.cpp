@@ -170,6 +170,20 @@ int main() {
         assert(transport.mailboxStatusMode() == oec::MailboxStatusMode::Strict);
     }
 
+    // Mailbox error classification API.
+    {
+        assert(oec::LinuxRawSocketTransport::classifyMailboxError("Timed out waiting for CoE mailbox response") ==
+               oec::MailboxErrorClass::Timeout);
+        assert(oec::LinuxRawSocketTransport::classifyMailboxError("SM0 mailbox remained busy in strict mode") ==
+               oec::MailboxErrorClass::Busy);
+        assert(oec::LinuxRawSocketTransport::classifyMailboxError("Unexpected SDO command for upload") ==
+               oec::MailboxErrorClass::ParseReject);
+        assert(oec::LinuxRawSocketTransport::classifyMailboxError("SDO abort") ==
+               oec::MailboxErrorClass::Abort);
+        assert(oec::LinuxRawSocketTransport::classifyMailboxError("transport not open") ==
+               oec::MailboxErrorClass::TransportIo);
+    }
+
     std::cout << "coe_mailbox_protocol_tests passed\n";
     return 0;
 }

@@ -25,6 +25,7 @@ This repository provides:
 - Mailbox regression coverage: mixed-stream protocol tests for emergency + stale frame + valid correlated response selection.
 - Mailbox status modes for ESC variance: `OEC_MAILBOX_STATUS_MODE=strict|hybrid|poll` (default `hybrid`).
 - Mailbox emergency queue hardening: bounded queue with overflow/drop accounting (`OEC_MAILBOX_EMERGENCY_QUEUE_LIMIT`).
+- Mailbox error taxonomy diagnostics: timeout/busy/parse/stale/abort/transport-IO class counters.
 - FoE/EoE service APIs (read/write file, send/receive encapsulated Ethernet frame).
 - Distributed clock sync controller with filtered offset, PI correction, and jitter stats.
 - Topology manager with hot-connect/missing detection and redundancy health checks.

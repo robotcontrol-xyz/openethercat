@@ -153,6 +153,7 @@ Mailbox robustness behavior in current Linux transport:
 - CoE emergency frames observed during SDO waits are queued for later retrieval via `pollEmergency(...)`.
 - `strict` mode enforces SM status availability/readiness before mailbox transfer.
 - `poll` mode skips status-bit gating and relies on mailbox polling cadence.
+- Mailbox diagnostics include error-class counters (`timeout`, `busy`, `parse`, `stale_counter`, `abort`, `transport_io`, `unknown`) for KPI analysis.
 
 Typical command:
 

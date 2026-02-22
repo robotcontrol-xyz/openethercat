@@ -62,6 +62,28 @@ const char* toModeName(oec::MailboxStatusMode mode) {
     return "hybrid";
 }
 
+const char* toErrorClassName(oec::MailboxErrorClass cls) {
+    switch (cls) {
+    case oec::MailboxErrorClass::None:
+        return "none";
+    case oec::MailboxErrorClass::Timeout:
+        return "timeout";
+    case oec::MailboxErrorClass::Busy:
+        return "busy";
+    case oec::MailboxErrorClass::ParseReject:
+        return "parse_reject";
+    case oec::MailboxErrorClass::StaleCounter:
+        return "stale_counter";
+    case oec::MailboxErrorClass::Abort:
+        return "abort";
+    case oec::MailboxErrorClass::TransportIo:
+        return "transport_io";
+    case oec::MailboxErrorClass::Unknown:
+        return "unknown";
+    }
+    return "unknown";
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -127,6 +149,7 @@ int main(int argc, char** argv) {
                 if (failed <= 5U) {
                     std::cerr << "SDO failure cycle " << i
                               << " abort=0x" << std::hex << abortCode << std::dec
+                              << " class=" << (linux ? toErrorClassName(linux->lastMailboxErrorClass()) : "n/a")
                               << " error=" << sdoError << '\n';
                 }
             }
@@ -159,6 +182,13 @@ int main(int argc, char** argv) {
                       << " emergencies=" << d.emergencyQueued
                       << " emergencies_dropped=" << d.emergencyDropped
                       << " matched=" << d.matchedResponses
+                      << " err_timeout=" << d.errorTimeout
+                      << " err_busy=" << d.errorBusy
+                      << " err_parse=" << d.errorParseReject
+                      << " err_stale=" << d.errorStaleCounter
+                      << " err_abort=" << d.errorAbort
+                      << " err_io=" << d.errorTransportIo
+                      << " err_unknown=" << d.errorUnknown
                       << '\n';
         }
 

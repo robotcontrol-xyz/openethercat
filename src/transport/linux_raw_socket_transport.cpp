@@ -169,6 +169,34 @@ MailboxStatusMode parseMailboxStatusMode(const char* value) {
     return MailboxStatusMode::Hybrid;
 }
 
+void incrementMailboxErrorClassCounter(MailboxDiagnostics& diagnostics, MailboxErrorClass cls) {
+    switch (cls) {
+    case MailboxErrorClass::Timeout:
+        ++diagnostics.errorTimeout;
+        break;
+    case MailboxErrorClass::Busy:
+        ++diagnostics.errorBusy;
+        break;
+    case MailboxErrorClass::ParseReject:
+        ++diagnostics.errorParseReject;
+        break;
+    case MailboxErrorClass::StaleCounter:
+        ++diagnostics.errorStaleCounter;
+        break;
+    case MailboxErrorClass::Abort:
+        ++diagnostics.errorAbort;
+        break;
+    case MailboxErrorClass::TransportIo:
+        ++diagnostics.errorTransportIo;
+        break;
+    case MailboxErrorClass::Unknown:
+        ++diagnostics.errorUnknown;
+        break;
+    case MailboxErrorClass::None:
+        break;
+    }
+}
+
 bool isIgnorableSdoParseError(const std::string& error) {
     return (error.find("Unexpected CoE service") != std::string::npos) ||
            (error.find("Unexpected SDO command") != std::string::npos) ||
@@ -322,6 +350,7 @@ bool LinuxRawSocketTransport::open() {
         }
     }
     lastWorkingCounter_ = 0;
+    lastMailboxErrorClass_ = MailboxErrorClass::None;
     if (!openEthercatInterfaceSocket(ifname_, socketFd_, ifIndex_, sourceMac_, error_)) {
         close();
         return false;
@@ -357,6 +386,7 @@ void LinuxRawSocketTransport::close() {
     while (!emergencies_.empty()) {
         emergencies_.pop();
     }
+    lastMailboxErrorClass_ = MailboxErrorClass::None;
 }
 
 bool LinuxRawSocketTransport::exchange(const std::vector<std::uint8_t>& txProcessData,
@@ -693,13 +723,28 @@ bool LinuxRawSocketTransport::sdoUpload(std::uint16_t slavePosition, const SdoAd
     outData.clear();
     outAbortCode = 0U;
     outError.clear();
+    MailboxErrorClass txErrorClass = MailboxErrorClass::None;
+    auto setTxErrorClass = [&](MailboxErrorClass cls) {
+        if (txErrorClass == MailboxErrorClass::None) {
+            txErrorClass = cls;
+        }
+    };
     auto fail = [&]() -> bool {
+        if (txErrorClass == MailboxErrorClass::None) {
+            txErrorClass = classifyMailboxError(outError);
+            if (txErrorClass == MailboxErrorClass::None) {
+                txErrorClass = MailboxErrorClass::Unknown;
+            }
+        }
+        lastMailboxErrorClass_ = txErrorClass;
+        incrementMailboxErrorClassCounter(mailboxDiagnostics_, txErrorClass);
         ++mailboxDiagnostics_.transactionsFailed;
         return false;
     };
 
     if (socketFd_ < 0) {
         outError = "transport not open";
+        setTxErrorClass(MailboxErrorClass::TransportIo);
         return fail();
     }
     const auto statusMode = mailboxStatusMode_;
@@ -758,6 +803,7 @@ bool LinuxRawSocketTransport::sdoUpload(std::uint16_t slavePosition, const SdoAd
                 if (isTransientMailboxTransportError(localError)) {
                     ++mailboxDiagnostics_.mailboxTimeouts;
                 }
+                setTxErrorClass(classifyMailboxError(localError));
                 return false;
             }
             ++mailboxDiagnostics_.datagramRetries;
@@ -766,6 +812,9 @@ bool LinuxRawSocketTransport::sdoUpload(std::uint16_t slavePosition, const SdoAd
         outError = firstError.empty() ? "Mailbox datagram failed" : firstError;
         if (isTransientMailboxTransportError(outError)) {
             ++mailboxDiagnostics_.mailboxTimeouts;
+            setTxErrorClass(MailboxErrorClass::Timeout);
+        } else {
+            setTxErrorClass(classifyMailboxError(outError));
         }
         return false;
     };
@@ -836,6 +885,7 @@ bool LinuxRawSocketTransport::sdoUpload(std::uint16_t slavePosition, const SdoAd
                 if (!readSmStatus(0U, status)) {
                     if (statusMode == MailboxStatusMode::Strict) {
                         outError = "SM0 status read failed in strict mode";
+                        setTxErrorClass(MailboxErrorClass::Busy);
                         return false;
                     }
                     break;
@@ -848,6 +898,7 @@ bool LinuxRawSocketTransport::sdoUpload(std::uint16_t slavePosition, const SdoAd
             }
             if (statusMode == MailboxStatusMode::Strict && !writeReady) {
                 outError = "SM0 mailbox remained busy in strict mode";
+                setTxErrorClass(MailboxErrorClass::Busy);
                 return false;
             }
         }
@@ -896,6 +947,7 @@ bool LinuxRawSocketTransport::sdoUpload(std::uint16_t slavePosition, const SdoAd
                 if (statusMode == MailboxStatusMode::Strict) {
                     if (!haveStatus) {
                         outError = "SM1 status read failed in strict mode";
+                        setTxErrorClass(MailboxErrorClass::Busy);
                         return false;
                     }
                     if (!mailboxHasData) {
@@ -941,11 +993,13 @@ bool LinuxRawSocketTransport::sdoUpload(std::uint16_t slavePosition, const SdoAd
             }
             if ((decoded->counter & 0x07U) != (expectedCounter & 0x07U)) {
                 ++mailboxDiagnostics_.staleCounterDrops;
+                setTxErrorClass(MailboxErrorClass::StaleCounter);
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
                 continue;
             }
             if (!accept(*decoded)) {
                 ++mailboxDiagnostics_.parseRejects;
+                setTxErrorClass(MailboxErrorClass::ParseReject);
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
                 continue;
             }
@@ -955,6 +1009,9 @@ bool LinuxRawSocketTransport::sdoUpload(std::uint16_t slavePosition, const SdoAd
         }
         outError = "Timed out waiting for CoE mailbox response";
         ++mailboxDiagnostics_.mailboxTimeouts;
+        if (txErrorClass == MailboxErrorClass::None) {
+            setTxErrorClass(MailboxErrorClass::Timeout);
+        }
         return false;
     };
 
@@ -984,11 +1041,15 @@ bool LinuxRawSocketTransport::sdoUpload(std::uint16_t slavePosition, const SdoAd
     }
     if (fatalParseError) {
         outError = fatalParseReason;
+        setTxErrorClass(MailboxErrorClass::ParseReject);
         return fail();
     }
     if (!init.success) {
         outAbortCode = init.abortCode;
         outError = init.error;
+        if (init.abortCode != 0U || init.error == "SDO abort") {
+            setTxErrorClass(MailboxErrorClass::Abort);
+        }
         return fail();
     }
 
@@ -1027,11 +1088,15 @@ bool LinuxRawSocketTransport::sdoUpload(std::uint16_t slavePosition, const SdoAd
         }
         if (fatalParseError) {
             outError = fatalParseReason;
+            setTxErrorClass(MailboxErrorClass::ParseReject);
             return fail();
         }
         if (!seg.success) {
             outAbortCode = seg.abortCode;
             outError = seg.error;
+            if (seg.abortCode != 0U || seg.error == "SDO abort") {
+                setTxErrorClass(MailboxErrorClass::Abort);
+            }
             return fail();
         }
         outData.insert(outData.end(), seg.data.begin(), seg.data.end());
@@ -1041,6 +1106,7 @@ bool LinuxRawSocketTransport::sdoUpload(std::uint16_t slavePosition, const SdoAd
         }
     }
 
+    lastMailboxErrorClass_ = MailboxErrorClass::None;
     return true;
 }
 
@@ -1050,13 +1116,28 @@ bool LinuxRawSocketTransport::sdoDownload(std::uint16_t slavePosition, const Sdo
     ++mailboxDiagnostics_.transactionsStarted;
     outAbortCode = 0U;
     outError.clear();
+    MailboxErrorClass txErrorClass = MailboxErrorClass::None;
+    auto setTxErrorClass = [&](MailboxErrorClass cls) {
+        if (txErrorClass == MailboxErrorClass::None) {
+            txErrorClass = cls;
+        }
+    };
     auto fail = [&]() -> bool {
+        if (txErrorClass == MailboxErrorClass::None) {
+            txErrorClass = classifyMailboxError(outError);
+            if (txErrorClass == MailboxErrorClass::None) {
+                txErrorClass = MailboxErrorClass::Unknown;
+            }
+        }
+        lastMailboxErrorClass_ = txErrorClass;
+        incrementMailboxErrorClassCounter(mailboxDiagnostics_, txErrorClass);
         ++mailboxDiagnostics_.transactionsFailed;
         return false;
     };
 
     if (socketFd_ < 0) {
         outError = "transport not open";
+        setTxErrorClass(MailboxErrorClass::TransportIo);
         return fail();
     }
     const auto statusMode = mailboxStatusMode_;
@@ -1115,6 +1196,7 @@ bool LinuxRawSocketTransport::sdoDownload(std::uint16_t slavePosition, const Sdo
                 if (isTransientMailboxTransportError(localError)) {
                     ++mailboxDiagnostics_.mailboxTimeouts;
                 }
+                setTxErrorClass(classifyMailboxError(localError));
                 return false;
             }
             ++mailboxDiagnostics_.datagramRetries;
@@ -1123,6 +1205,9 @@ bool LinuxRawSocketTransport::sdoDownload(std::uint16_t slavePosition, const Sdo
         outError = firstError.empty() ? "Mailbox datagram failed" : firstError;
         if (isTransientMailboxTransportError(outError)) {
             ++mailboxDiagnostics_.mailboxTimeouts;
+            setTxErrorClass(MailboxErrorClass::Timeout);
+        } else {
+            setTxErrorClass(classifyMailboxError(outError));
         }
         return false;
     };
@@ -1193,6 +1278,7 @@ bool LinuxRawSocketTransport::sdoDownload(std::uint16_t slavePosition, const Sdo
                 if (!readSmStatus(0U, status)) {
                     if (statusMode == MailboxStatusMode::Strict) {
                         outError = "SM0 status read failed in strict mode";
+                        setTxErrorClass(MailboxErrorClass::Busy);
                         return false;
                     }
                     break;
@@ -1205,6 +1291,7 @@ bool LinuxRawSocketTransport::sdoDownload(std::uint16_t slavePosition, const Sdo
             }
             if (statusMode == MailboxStatusMode::Strict && !writeReady) {
                 outError = "SM0 mailbox remained busy in strict mode";
+                setTxErrorClass(MailboxErrorClass::Busy);
                 return false;
             }
         }
@@ -1253,6 +1340,7 @@ bool LinuxRawSocketTransport::sdoDownload(std::uint16_t slavePosition, const Sdo
                 if (statusMode == MailboxStatusMode::Strict) {
                     if (!haveStatus) {
                         outError = "SM1 status read failed in strict mode";
+                        setTxErrorClass(MailboxErrorClass::Busy);
                         return false;
                     }
                     if (!mailboxHasData) {
@@ -1298,11 +1386,13 @@ bool LinuxRawSocketTransport::sdoDownload(std::uint16_t slavePosition, const Sdo
             }
             if ((decoded->counter & 0x07U) != (expectedCounter & 0x07U)) {
                 ++mailboxDiagnostics_.staleCounterDrops;
+                setTxErrorClass(MailboxErrorClass::StaleCounter);
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
                 continue;
             }
             if (!accept(*decoded)) {
                 ++mailboxDiagnostics_.parseRejects;
+                setTxErrorClass(MailboxErrorClass::ParseReject);
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
                 continue;
             }
@@ -1312,6 +1402,9 @@ bool LinuxRawSocketTransport::sdoDownload(std::uint16_t slavePosition, const Sdo
         }
         outError = "Timed out waiting for CoE mailbox response";
         ++mailboxDiagnostics_.mailboxTimeouts;
+        if (txErrorClass == MailboxErrorClass::None) {
+            setTxErrorClass(MailboxErrorClass::Timeout);
+        }
         return false;
     };
 
@@ -1342,11 +1435,15 @@ bool LinuxRawSocketTransport::sdoDownload(std::uint16_t slavePosition, const Sdo
     }
     if (fatalParseError) {
         outError = fatalParseReason;
+        setTxErrorClass(MailboxErrorClass::ParseReject);
         return fail();
     }
     if (!ack.success) {
         outAbortCode = ack.abortCode;
         outError = ack.error;
+        if (ack.abortCode != 0U || ack.error == "SDO abort") {
+            setTxErrorClass(MailboxErrorClass::Abort);
+        }
         return fail();
     }
 
@@ -1383,17 +1480,22 @@ bool LinuxRawSocketTransport::sdoDownload(std::uint16_t slavePosition, const Sdo
         }
         if (fatalParseError) {
             outError = fatalParseReason;
+            setTxErrorClass(MailboxErrorClass::ParseReject);
             return fail();
         }
         if (!ack.success) {
             outAbortCode = ack.abortCode;
             outError = ack.error;
+            if (ack.abortCode != 0U || ack.error == "SDO abort") {
+                setTxErrorClass(MailboxErrorClass::Abort);
+            }
             return fail();
         }
         offset += chunk;
         toggle ^= 0x01U;
     }
 
+    lastMailboxErrorClass_ = MailboxErrorClass::None;
     return true;
 }
 
@@ -2024,7 +2126,10 @@ bool LinuxRawSocketTransport::eoeReceive(std::uint16_t slavePosition, std::vecto
 std::string LinuxRawSocketTransport::lastError() const { return error_; }
 std::uint16_t LinuxRawSocketTransport::lastWorkingCounter() const { return lastWorkingCounter_; }
 MailboxDiagnostics LinuxRawSocketTransport::mailboxDiagnostics() const { return mailboxDiagnostics_; }
-void LinuxRawSocketTransport::resetMailboxDiagnostics() { mailboxDiagnostics_ = MailboxDiagnostics{}; }
+void LinuxRawSocketTransport::resetMailboxDiagnostics() {
+    mailboxDiagnostics_ = MailboxDiagnostics{};
+    lastMailboxErrorClass_ = MailboxErrorClass::None;
+}
 void LinuxRawSocketTransport::setMailboxStatusMode(MailboxStatusMode mode) { mailboxStatusMode_ = mode; }
 MailboxStatusMode LinuxRawSocketTransport::mailboxStatusMode() const { return mailboxStatusMode_; }
 void LinuxRawSocketTransport::setEmergencyQueueLimit(std::size_t limit) {
@@ -2035,5 +2140,43 @@ void LinuxRawSocketTransport::setEmergencyQueueLimit(std::size_t limit) {
     }
 }
 std::size_t LinuxRawSocketTransport::emergencyQueueLimit() const { return emergencyQueueLimit_; }
+MailboxErrorClass LinuxRawSocketTransport::lastMailboxErrorClass() const { return lastMailboxErrorClass_; }
+MailboxErrorClass LinuxRawSocketTransport::classifyMailboxError(const std::string& errorText) {
+    if (errorText.empty()) {
+        return MailboxErrorClass::None;
+    }
+    if (errorText.find("SDO abort") != std::string::npos) {
+        return MailboxErrorClass::Abort;
+    }
+    if (errorText.find("timeout") != std::string::npos ||
+        errorText.find("Timed out") != std::string::npos ||
+        errorText.find("response frame not found") != std::string::npos) {
+        return MailboxErrorClass::Timeout;
+    }
+    if (errorText.find("busy") != std::string::npos ||
+        errorText.find("status read failed in strict mode") != std::string::npos) {
+        return MailboxErrorClass::Busy;
+    }
+    if (errorText.find("toggle mismatch") != std::string::npos ||
+        errorText.find("address mismatch") != std::string::npos ||
+        errorText.find("Unexpected CoE service") != std::string::npos ||
+        errorText.find("Unexpected SDO command") != std::string::npos ||
+        errorText.find("parse") != std::string::npos) {
+        return MailboxErrorClass::ParseReject;
+    }
+    if (errorText.find("stale") != std::string::npos ||
+        errorText.find("counter mismatch") != std::string::npos) {
+        return MailboxErrorClass::StaleCounter;
+    }
+    if (errorText.find("socket") != std::string::npos ||
+        errorText.find("sendto") != std::string::npos ||
+        errorText.find("recv") != std::string::npos ||
+        errorText.find("select()") != std::string::npos ||
+        errorText.find("transport not open") != std::string::npos ||
+        errorText.find("not open") != std::string::npos) {
+        return MailboxErrorClass::TransportIo;
+    }
+    return MailboxErrorClass::Unknown;
+}
 
 } // namespace oec
