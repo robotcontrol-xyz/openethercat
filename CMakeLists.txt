@@ -94,6 +94,9 @@ if(OEC_BUILD_EXAMPLES)
     add_executable(topology_reconcile_demo examples/topology_reconcile_demo.cpp)
     target_link_libraries(topology_reconcile_demo PRIVATE openethercat)
 
+    add_executable(redundancy_fault_sequence_demo examples/redundancy_fault_sequence_demo.cpp)
+    target_link_libraries(redundancy_fault_sequence_demo PRIVATE openethercat)
+
     add_executable(mailbox_soak_demo examples/mailbox_soak_demo.cpp)
     target_link_libraries(mailbox_soak_demo PRIVATE openethercat)
 

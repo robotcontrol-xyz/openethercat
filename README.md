@@ -81,6 +81,7 @@ Artifacts are emitted in `build/` as `.deb` files, one for each component.
 ./build/el6751_can_bridge_demo
 ./build/physical_topology_scan_demo linux:eth0
 ./build/topology_reconcile_demo
+./build/redundancy_fault_sequence_demo
 ./build/mailbox_soak_demo linux:eth0 1 0x1018 0x01 1000
 ./build/dc_hardware_sync_demo linux:eth0 1 500 10
 ./build/dc_soak_demo linux:eth0 600 1000
@@ -142,6 +143,8 @@ OEC_TOPOLOGY_MISSING_ACTION=degrade \
 # Redundancy policy controls:
 # OEC_TOPOLOGY_REDUNDANCY_GRACE=<cycles>
 # OEC_TOPOLOGY_REDUNDANCY_ACTION=monitor|retry|reconfigure|degrade|failstop
+# Scripted redundancy fault sequence (timeline + KPIs):
+./build/redundancy_fault_sequence_demo
 ```
 
 Physical I/O troubleshooting (mapping + WKC + output RAM readback):

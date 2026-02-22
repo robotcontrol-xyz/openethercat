@@ -192,6 +192,83 @@ int main() {
         master.stop();
     }
 
+    // Redundancy policy latching and reset under sustained fault and recovery.
+    {
+        oec::MockTransport transport(1, 1);
+        oec::EthercatMaster master(transport);
+
+        oec::NetworkConfiguration cfg;
+        cfg.processImageInputBytes = 1;
+        cfg.processImageOutputBytes = 1;
+        cfg.slaves = {
+            {.name = "EK1100", .alias = 0, .position = 0, .vendorId = 0x2, .productCode = 0x044c2c52},
+        };
+        cfg.signals = {
+            {.logicalName = "InputA", .direction = oec::SignalDirection::Input, .slaveName = "EK1100", .byteOffset = 0, .bitOffset = 0},
+        };
+
+        assert(master.configure(cfg));
+        auto stateOpts = oec::EthercatMaster::StateMachineOptions{};
+        stateOpts.enable = false;
+        master.setStateMachineOptions(stateOpts);
+        auto topoOpts = oec::EthercatMaster::TopologyRecoveryOptions{};
+        topoOpts.enable = true;
+        topoOpts.missingSlaveAction = oec::EthercatMaster::TopologyPolicyAction::Monitor;
+        topoOpts.hotConnectAction = oec::EthercatMaster::TopologyPolicyAction::Monitor;
+        topoOpts.redundancyGraceCycles = 2U;
+        topoOpts.redundancyAction = oec::EthercatMaster::TopologyPolicyAction::Monitor;
+        master.setTopologyRecoveryOptions(topoOpts);
+        assert(master.start());
+
+        transport.setDiscoveredSlaves({
+            {.position = 0, .vendorId = 0x2, .productCode = 0x044c2c52, .online = true},
+        });
+        std::string topoError;
+
+        // Sustained fault should not repeatedly trigger policy due to latch.
+        transport.setRedundancyHealthy(false);
+        for (int i = 0; i < 6; ++i) {
+            assert(master.refreshTopology(topoError));
+        }
+        const auto eventsAfterFault = master.recoveryEvents();
+        std::size_t redundancyEvents = 0;
+        for (const auto& e : eventsAfterFault) {
+            if (e.message.find("redundancy-down") != std::string::npos) {
+                ++redundancyEvents;
+            }
+        }
+        assert(redundancyEvents == 1U);
+        const auto k1 = master.redundancyKpis();
+        assert(k1.degradeEvents == 1U);
+        assert(k1.lastPolicyTriggerLatencyMs >= 0);
+
+        // Recovery should reset latch and allow future trigger.
+        transport.setRedundancyHealthy(true);
+        for (int i = 0; i < 3; ++i) {
+            assert(master.refreshTopology(topoError));
+        }
+        const auto s2 = master.redundancyStatus();
+        assert(s2.redundancyHealthy);
+
+        transport.setRedundancyHealthy(false);
+        for (int i = 0; i < 3; ++i) {
+            assert(master.refreshTopology(topoError));
+        }
+        const auto eventsAfterSecondFault = master.recoveryEvents();
+        std::size_t redundancyEvents2 = 0;
+        for (const auto& e : eventsAfterSecondFault) {
+            if (e.message.find("redundancy-down") != std::string::npos) {
+                ++redundancyEvents2;
+            }
+        }
+        assert(redundancyEvents2 == 2U);
+        const auto k2 = master.redundancyKpis();
+        assert(k2.degradeEvents == 2U);
+        assert(k2.recoverEvents >= 1U);
+
+        master.stop();
+    }
+
     // HIL conformance evaluator.
     {
         oec::HilKpi kpi;
