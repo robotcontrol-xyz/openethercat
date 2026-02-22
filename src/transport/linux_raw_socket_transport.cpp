@@ -2385,10 +2385,16 @@ bool LinuxRawSocketTransport::foeRead(std::uint16_t slavePosition, const FoERequ
                                       FoEResponse& outResponse, std::string& outError) {
     outResponse = FoEResponse{};
     outError.clear();
-    if (socketFd_ < 0) {
-        outError = "transport not open";
+    ++mailboxDiagnostics_.foeReadStarted;
+    auto fail = [&](std::string message) -> bool {
+        outError = std::move(message);
+        outResponse.success = false;
         outResponse.error = outError;
+        ++mailboxDiagnostics_.foeReadFailed;
         return false;
+    };
+    if (socketFd_ < 0) {
+        return fail("transport not open");
     }
 
     const auto adp = toAutoIncrementAddress(slavePosition);
@@ -2499,8 +2505,7 @@ bool LinuxRawSocketTransport::foeRead(std::uint16_t slavePosition, const FoERequ
 
     std::uint8_t expectedCounter = 0U;
     if (!mailboxWrite(kMailboxTypeFoe, rrq, expectedCounter)) {
-        outResponse.error = outError;
-        return false;
+        return fail(outError);
     }
 
     const std::size_t maxDataPerPacket =
@@ -2509,36 +2514,27 @@ bool LinuxRawSocketTransport::foeRead(std::uint16_t slavePosition, const FoERequ
     while (true) {
         EscMailboxFrame frame;
         if (!mailboxReadExpected(expectedCounter, kMailboxTypeFoe, frame)) {
-            outResponse.error = outError;
-            return false;
+            return fail(outError);
         }
         if (frame.payload.size() < 2U) {
-            outError = "FoE response payload too short";
-            outResponse.error = outError;
-            return false;
+            return fail("FoE response payload too short");
         }
         const auto op = readLe16Raw(frame.payload, 0U);
         if (op == kFoeOpErr) {
             const auto errCode = (frame.payload.size() >= 6U) ? readLe32Raw(frame.payload, 2U) : 0U;
-            outError = "FoE error response code=0x" + std::to_string(errCode);
-            outResponse.error = outError;
-            return false;
+            return fail("FoE error response code=0x" + std::to_string(errCode));
         }
         if (op == kFoeOpBusy) {
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
             continue;
         }
         if (op != kFoeOpData || frame.payload.size() < 6U) {
-            outError = "Unexpected FoE response opcode";
-            outResponse.error = outError;
-            return false;
+            return fail("Unexpected FoE response opcode");
         }
 
         const auto packetNo = readLe32Raw(frame.payload, 2U);
         if (packetNo != expectedPacket) {
-            outError = "FoE packet sequence mismatch";
-            outResponse.error = outError;
-            return false;
+            return fail("FoE packet sequence mismatch");
         }
         const std::vector<std::uint8_t> chunk(frame.payload.begin() + 6, frame.payload.end());
         outResponse.data.insert(outResponse.data.end(), chunk.begin(), chunk.end());
@@ -2548,8 +2544,7 @@ bool LinuxRawSocketTransport::foeRead(std::uint16_t slavePosition, const FoERequ
         appendLe16Raw(ack, kFoeOpAck);
         appendLe32Raw(ack, packetNo);
         if (!mailboxWrite(kMailboxTypeFoe, ack, expectedCounter)) {
-            outResponse.error = outError;
-            return false;
+            return fail(outError);
         }
         ++expectedPacket;
 
@@ -2564,9 +2559,14 @@ bool LinuxRawSocketTransport::foeRead(std::uint16_t slavePosition, const FoERequ
 bool LinuxRawSocketTransport::foeWrite(std::uint16_t slavePosition, const FoERequest& request,
                                        const std::vector<std::uint8_t>& data, std::string& outError) {
     outError.clear();
-    if (socketFd_ < 0) {
-        outError = "transport not open";
+    ++mailboxDiagnostics_.foeWriteStarted;
+    auto fail = [&](std::string message) -> bool {
+        outError = std::move(message);
+        ++mailboxDiagnostics_.foeWriteFailed;
         return false;
+    };
+    if (socketFd_ < 0) {
+        return fail("transport not open");
     }
 
     const auto adp = toAutoIncrementAddress(slavePosition);
@@ -2663,25 +2663,22 @@ bool LinuxRawSocketTransport::foeWrite(std::uint16_t slavePosition, const FoEReq
 
     std::uint8_t expectedCounter = 0U;
     if (!mailboxWrite(kMailboxTypeFoe, wrq, expectedCounter)) {
-        return false;
+        return fail(outError);
     }
 
     EscMailboxFrame frame;
     if (!mailboxReadExpected(expectedCounter, kMailboxTypeFoe, frame)) {
-        return false;
+        return fail(outError);
     }
     if (frame.payload.size() < 2U) {
-        outError = "FoE response payload too short";
-        return false;
+        return fail("FoE response payload too short");
     }
     auto op = readLe16Raw(frame.payload, 0U);
     if (op == kFoeOpErr) {
-        outError = "FoE write request rejected";
-        return false;
+        return fail("FoE write request rejected");
     }
     if (op != kFoeOpAck) {
-        outError = "Expected FoE ACK after WRQ";
-        return false;
+        return fail("Expected FoE ACK after WRQ");
     }
 
     const std::size_t maxDataBytes = (writeSize > 12U)
@@ -2702,30 +2699,26 @@ bool LinuxRawSocketTransport::foeWrite(std::uint16_t slavePosition, const FoEReq
         }
 
         if (!mailboxWrite(kMailboxTypeFoe, payload, expectedCounter)) {
-            return false;
+            return fail(outError);
         }
 
         frame = EscMailboxFrame{};
         if (!mailboxReadExpected(expectedCounter, kMailboxTypeFoe, frame)) {
-            return false;
+            return fail(outError);
         }
         if (frame.payload.size() < 2U) {
-            outError = "FoE ACK payload too short";
-            return false;
+            return fail("FoE ACK payload too short");
         }
         op = readLe16Raw(frame.payload, 0U);
         if (op == kFoeOpErr) {
-            outError = "FoE data packet rejected";
-            return false;
+            return fail("FoE data packet rejected");
         }
         if (op != kFoeOpAck || frame.payload.size() < 6U) {
-            outError = "Expected FoE ACK for data packet";
-            return false;
+            return fail("Expected FoE ACK for data packet");
         }
         const auto ackPacket = readLe32Raw(frame.payload, 2U);
         if (ackPacket != packetNo) {
-            outError = "FoE ACK packet mismatch";
-            return false;
+            return fail("FoE ACK packet mismatch");
         }
 
         cursor += chunkBytes;
@@ -2740,9 +2733,14 @@ bool LinuxRawSocketTransport::foeWrite(std::uint16_t slavePosition, const FoEReq
 bool LinuxRawSocketTransport::eoeSend(std::uint16_t slavePosition, const std::vector<std::uint8_t>& frame,
                                       std::string& outError) {
     outError.clear();
-    if (socketFd_ < 0) {
-        outError = "transport not open";
+    ++mailboxDiagnostics_.eoeSendStarted;
+    auto fail = [&](std::string message) -> bool {
+        outError = std::move(message);
+        ++mailboxDiagnostics_.eoeSendFailed;
         return false;
+    };
+    if (socketFd_ < 0) {
+        return fail("transport not open");
     }
     const auto adp = toAutoIncrementAddress(slavePosition);
     std::uint16_t writeOffset = mailboxWriteOffset_;
@@ -2776,15 +2774,14 @@ bool LinuxRawSocketTransport::eoeSend(std::uint16_t slavePosition, const std::ve
     eoe.payload = frame;
     auto bytes = CoeMailboxProtocol::encodeEscMailbox(eoe);
     if (bytes.size() > writeSize) {
-        outError = "EoE frame exceeds mailbox write window";
-        return false;
+        return fail("EoE frame exceeds mailbox write window");
     }
     bytes.resize(writeSize, 0U);
     std::uint16_t wkc = 0;
     if (!mailboxApwr(socketFd_, ifIndex_, timeoutMs_, maxFramesPerCycle_,
                      expectedWorkingCounter_, destinationMac_, sourceMac_,
                      datagramIndex_, adp, writeOffset, bytes, outError, &wkc)) {
-        return false;
+        return fail(outError);
     }
     lastWorkingCounter_ = wkc;
     ++mailboxDiagnostics_.mailboxWrites;
@@ -2795,9 +2792,14 @@ bool LinuxRawSocketTransport::eoeReceive(std::uint16_t slavePosition, std::vecto
                                          std::string& outError) {
     frame.clear();
     outError.clear();
-    if (socketFd_ < 0) {
-        outError = "transport not open";
+    ++mailboxDiagnostics_.eoeReceiveStarted;
+    auto fail = [&](std::string message) -> bool {
+        outError = std::move(message);
+        ++mailboxDiagnostics_.eoeReceiveFailed;
         return false;
+    };
+    if (socketFd_ < 0) {
+        return fail("transport not open");
     }
     const auto adp = toAutoIncrementAddress(slavePosition);
     std::uint16_t readOffset = mailboxReadOffset_;
@@ -2824,7 +2826,7 @@ bool LinuxRawSocketTransport::eoeReceive(std::uint16_t slavePosition, std::vecto
         if (!mailboxAprd(socketFd_, ifIndex_, timeoutMs_, maxFramesPerCycle_,
                          expectedWorkingCounter_, destinationMac_, sourceMac_,
                          datagramIndex_, adp, readOffset, readSize, payload, outError, &wkc)) {
-            return false;
+            return fail(outError);
         }
         lastWorkingCounter_ = wkc;
         ++mailboxDiagnostics_.mailboxReads;
@@ -2841,9 +2843,8 @@ bool LinuxRawSocketTransport::eoeReceive(std::uint16_t slavePosition, std::vecto
         ++mailboxDiagnostics_.matchedResponses;
         return true;
     }
-    outError = "Timed out waiting for EoE mailbox frame";
     ++mailboxDiagnostics_.mailboxTimeouts;
-    return false;
+    return fail("Timed out waiting for EoE mailbox frame");
 }
 
 std::string LinuxRawSocketTransport::lastError() const { return error_; }

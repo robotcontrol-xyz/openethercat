@@ -16,6 +16,7 @@
 #include "openethercat/master/ethercat_master.hpp"
 #include "openethercat/master/hil_campaign.hpp"
 #include "openethercat/master/topology_manager.hpp"
+#include "openethercat/transport/linux_raw_socket_transport.hpp"
 #include "openethercat/transport/mock_transport.hpp"
 
 int main() {
@@ -60,6 +61,101 @@ int main() {
         assert(frame.size() == 4);
 
         master.stop();
+    }
+
+    // FoE edge cases on mock transport: missing file and overwrite semantics.
+    {
+        oec::MockTransport transport(1, 1);
+        assert(transport.open());
+
+        std::string error;
+        oec::FoEResponse read{};
+        const oec::FoERequest req{.fileName = "missing.bin", .password = 0, .maxChunkBytes = 64};
+        const bool missingOk = transport.foeRead(1, req, read, error);
+        assert(!missingOk);
+        assert(!read.success);
+        assert(read.error.find("not found") != std::string::npos);
+
+        assert(transport.foeWrite(1, req, {0x01, 0x02, 0x03}, error));
+        read = {};
+        assert(transport.foeRead(1, req, read, error));
+        assert(read.success);
+        assert(read.data.size() == 3U);
+        assert(read.data[0] == 0x01U);
+
+        // Overwrite same FoE key and verify latest payload is returned.
+        assert(transport.foeWrite(1, req, {0xAA, 0xBB}, error));
+        read = {};
+        assert(transport.foeRead(1, req, read, error));
+        assert(read.success);
+        assert(read.data.size() == 2U);
+        assert(read.data[0] == 0xAAU);
+        assert(read.data[1] == 0xBBU);
+
+        transport.close();
+    }
+
+    // EoE edge cases on mock transport: per-slave queue filtering and ordering.
+    {
+        oec::MockTransport transport(1, 1);
+        assert(transport.open());
+
+        std::string error;
+        assert(transport.eoeSend(2, {0x10, 0x11}, error));
+        assert(transport.eoeSend(3, {0x20, 0x21, 0x22}, error));
+
+        std::vector<std::uint8_t> frame;
+        // Wrong slave should not consume queue head.
+        assert(!transport.eoeReceive(1, frame, error));
+        // Correct slave consumes first queued frame.
+        assert(transport.eoeReceive(2, frame, error));
+        assert(frame.size() == 2U);
+        assert(frame[0] == 0x10U);
+        // Next frame belongs to slave 3.
+        assert(transport.eoeReceive(3, frame, error));
+        assert(frame.size() == 3U);
+        assert(frame[0] == 0x20U);
+        // Queue empty now.
+        assert(!transport.eoeReceive(3, frame, error));
+
+        transport.close();
+    }
+
+    // Linux transport guard behavior for FoE/EoE APIs without open transport.
+    {
+        oec::LinuxRawSocketTransport transport("eth0");
+        std::string error;
+        oec::FoEResponse foeReadRsp{};
+        const oec::FoERequest req{.fileName = "guard.bin", .password = 0, .maxChunkBytes = 128};
+
+        assert(!transport.foeRead(1, req, foeReadRsp, error));
+        assert(error.find("not open") != std::string::npos);
+        assert(!foeReadRsp.success);
+        assert(foeReadRsp.error.find("not open") != std::string::npos);
+
+        error.clear();
+        assert(!transport.foeWrite(1, req, {0x01}, error));
+        assert(error.find("not open") != std::string::npos);
+
+        error.clear();
+        assert(!transport.eoeSend(1, {0xDE, 0xAD}, error));
+        assert(error.find("not open") != std::string::npos);
+
+        std::vector<std::uint8_t> frame;
+        error.clear();
+        assert(!transport.eoeReceive(1, frame, error));
+        assert(error.find("not open") != std::string::npos);
+
+        const auto d = transport.mailboxDiagnostics();
+        assert(d.schemaVersion == 2U);
+        assert(d.foeReadStarted == 1U);
+        assert(d.foeReadFailed == 1U);
+        assert(d.foeWriteStarted == 1U);
+        assert(d.foeWriteFailed == 1U);
+        assert(d.eoeSendStarted == 1U);
+        assert(d.eoeSendFailed == 1U);
+        assert(d.eoeReceiveStarted == 1U);
+        assert(d.eoeReceiveFailed == 1U);
     }
 
     // Distributed clock controller trend and clamp behavior.

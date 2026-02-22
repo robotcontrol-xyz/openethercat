@@ -203,7 +203,7 @@ int main() {
         assert(!ok);
         assert(transport.lastMailboxErrorClass() == oec::MailboxErrorClass::Timeout);
         const auto d = transport.mailboxDiagnostics();
-        assert(d.schemaVersion == 1U);
+        assert(d.schemaVersion == 2U);
         assert(d.transactionsStarted == 1U);
         assert(d.transactionsFailed == 1U);
         assert(d.errorTimeout >= 1U);

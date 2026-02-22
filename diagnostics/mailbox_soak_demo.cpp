@@ -204,6 +204,14 @@ int main(int argc, char** argv) {
                           << ",\"schema_version\":" << d.schemaVersion
                           << ",\"tx_started\":" << d.transactionsStarted
                           << ",\"tx_failed\":" << d.transactionsFailed
+                          << ",\"foe_read_started\":" << d.foeReadStarted
+                          << ",\"foe_read_failed\":" << d.foeReadFailed
+                          << ",\"foe_write_started\":" << d.foeWriteStarted
+                          << ",\"foe_write_failed\":" << d.foeWriteFailed
+                          << ",\"eoe_send_started\":" << d.eoeSendStarted
+                          << ",\"eoe_send_failed\":" << d.eoeSendFailed
+                          << ",\"eoe_receive_started\":" << d.eoeReceiveStarted
+                          << ",\"eoe_receive_failed\":" << d.eoeReceiveFailed
                           << ",\"writes\":" << d.mailboxWrites
                           << ",\"reads\":" << d.mailboxReads
                           << ",\"retries\":" << d.datagramRetries
@@ -226,6 +234,14 @@ int main(int argc, char** argv) {
                           << " schema_version=" << d.schemaVersion
                           << " tx_started=" << d.transactionsStarted
                           << " tx_failed=" << d.transactionsFailed
+                          << " foe_read_started=" << d.foeReadStarted
+                          << " foe_read_failed=" << d.foeReadFailed
+                          << " foe_write_started=" << d.foeWriteStarted
+                          << " foe_write_failed=" << d.foeWriteFailed
+                          << " eoe_send_started=" << d.eoeSendStarted
+                          << " eoe_send_failed=" << d.eoeSendFailed
+                          << " eoe_receive_started=" << d.eoeReceiveStarted
+                          << " eoe_receive_failed=" << d.eoeReceiveFailed
                           << " writes=" << d.mailboxWrites
                           << " reads=" << d.mailboxReads
                           << " retries=" << d.datagramRetries
