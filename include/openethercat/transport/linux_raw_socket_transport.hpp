@@ -16,6 +16,22 @@
 
 namespace oec {
 
+/**
+ * @brief Mailbox-path diagnostics counters for LinuxRawSocketTransport.
+ */
+struct MailboxDiagnostics {
+    std::uint64_t transactionsStarted = 0;
+    std::uint64_t transactionsFailed = 0;
+    std::uint64_t mailboxWrites = 0;
+    std::uint64_t mailboxReads = 0;
+    std::uint64_t datagramRetries = 0;
+    std::uint64_t mailboxTimeouts = 0;
+    std::uint64_t staleCounterDrops = 0;
+    std::uint64_t parseRejects = 0;
+    std::uint64_t emergencyQueued = 0;
+    std::uint64_t matchedResponses = 0;
+};
+
 class LinuxRawSocketTransport final : public ITransport {
 public:
     explicit LinuxRawSocketTransport(std::string ifname);
@@ -65,6 +81,8 @@ public:
 
     std::string lastError() const override;
     std::uint16_t lastWorkingCounter() const override;
+    MailboxDiagnostics mailboxDiagnostics() const;
+    void resetMailboxDiagnostics();
 
 private:
     struct ProcessDataWindow {
@@ -98,6 +116,7 @@ private:
     std::string error_;
     std::vector<ProcessDataWindow> outputWindows_;
     std::queue<EmergencyMessage> emergencies_;
+    MailboxDiagnostics mailboxDiagnostics_{};
 };
 
 } // namespace oec

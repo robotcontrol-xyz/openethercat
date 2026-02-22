@@ -667,13 +667,18 @@ bool LinuxRawSocketTransport::failoverSlave(std::uint16_t position) {
 bool LinuxRawSocketTransport::sdoUpload(std::uint16_t slavePosition, const SdoAddress& address,
                                         std::vector<std::uint8_t>& outData, std::uint32_t& outAbortCode,
                                         std::string& outError) {
+    ++mailboxDiagnostics_.transactionsStarted;
     outData.clear();
     outAbortCode = 0U;
     outError.clear();
+    auto fail = [&]() -> bool {
+        ++mailboxDiagnostics_.transactionsFailed;
+        return false;
+    };
 
     if (socketFd_ < 0) {
         outError = "transport not open";
-        return false;
+        return fail();
     }
     const auto adp = toAutoIncrementAddress(slavePosition);
     std::uint16_t writeOffset = mailboxWriteOffset_;
@@ -719,11 +724,18 @@ bool LinuxRawSocketTransport::sdoUpload(std::uint16_t slavePosition, const SdoAd
             }
             if (!isTransientMailboxTransportError(localError) || attempt == mailboxRetries) {
                 outError = localError;
+                if (isTransientMailboxTransportError(localError)) {
+                    ++mailboxDiagnostics_.mailboxTimeouts;
+                }
                 return false;
             }
+            ++mailboxDiagnostics_.datagramRetries;
             sleepMailboxBackoff(attempt, mailboxBackoffBaseMs, mailboxBackoffMaxMs);
         }
         outError = firstError.empty() ? "Mailbox datagram failed" : firstError;
+        if (isTransientMailboxTransportError(outError)) {
+            ++mailboxDiagnostics_.mailboxTimeouts;
+        }
         return false;
     };
 
@@ -824,6 +836,7 @@ bool LinuxRawSocketTransport::sdoUpload(std::uint16_t slavePosition, const SdoAd
         if (!datagramWithRetry(req, wkc, payload)) {
             return false;
         }
+        ++mailboxDiagnostics_.mailboxWrites;
         lastWorkingCounter_ = wkc;
         return true;
     };
@@ -855,6 +868,7 @@ bool LinuxRawSocketTransport::sdoUpload(std::uint16_t slavePosition, const SdoAd
             if (!datagramWithRetry(req, wkc, payload)) {
                 return false;
             }
+            ++mailboxDiagnostics_.mailboxReads;
             lastWorkingCounter_ = wkc;
 
             auto decoded = CoeMailboxProtocol::decodeEscMailbox(payload);
@@ -869,27 +883,32 @@ bool LinuxRawSocketTransport::sdoUpload(std::uint16_t slavePosition, const SdoAd
             EmergencyMessage emergency {};
             if (CoeMailboxProtocol::parseEmergency(decoded->payload, slavePosition, emergency)) {
                 emergencies_.push(emergency);
+                ++mailboxDiagnostics_.emergencyQueued;
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
                 continue;
             }
             if ((decoded->counter & 0x07U) != (expectedCounter & 0x07U)) {
+                ++mailboxDiagnostics_.staleCounterDrops;
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
                 continue;
             }
             if (!accept(*decoded)) {
+                ++mailboxDiagnostics_.parseRejects;
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
                 continue;
             }
+            ++mailboxDiagnostics_.matchedResponses;
             outFrame = *decoded;
             return true;
         }
         outError = "Timed out waiting for CoE mailbox response";
+        ++mailboxDiagnostics_.mailboxTimeouts;
         return false;
     };
 
     std::uint8_t expectedCounter = 0U;
     if (!mailboxWrite(CoeMailboxProtocol::buildSdoInitiateUploadRequest(address), expectedCounter)) {
-        return false;
+        return fail();
     }
 
     EscMailboxFrame responseFrame;
@@ -909,16 +928,16 @@ bool LinuxRawSocketTransport::sdoUpload(std::uint16_t slavePosition, const SdoAd
             }
             return false;
         }, responseFrame)) {
-        return false;
+        return fail();
     }
     if (fatalParseError) {
         outError = fatalParseReason;
-        return false;
+        return fail();
     }
     if (!init.success) {
         outAbortCode = init.abortCode;
         outError = init.error;
-        return false;
+        return fail();
     }
 
     if (init.expedited) {
@@ -930,7 +949,7 @@ bool LinuxRawSocketTransport::sdoUpload(std::uint16_t slavePosition, const SdoAd
     while (true) {
         expectedCounter = 0U;
         if (!mailboxWrite(CoeMailboxProtocol::buildSdoUploadSegmentRequest(toggle), expectedCounter)) {
-            return false;
+            return fail();
         }
         CoeSdoSegmentUploadResponse seg;
         fatalParseError = false;
@@ -952,16 +971,16 @@ bool LinuxRawSocketTransport::sdoUpload(std::uint16_t slavePosition, const SdoAd
                 }
                 return false;
             }, responseFrame)) {
-            return false;
+            return fail();
         }
         if (fatalParseError) {
             outError = fatalParseReason;
-            return false;
+            return fail();
         }
         if (!seg.success) {
             outAbortCode = seg.abortCode;
             outError = seg.error;
-            return false;
+            return fail();
         }
         outData.insert(outData.end(), seg.data.begin(), seg.data.end());
         toggle ^= 0x01U;
@@ -976,12 +995,17 @@ bool LinuxRawSocketTransport::sdoUpload(std::uint16_t slavePosition, const SdoAd
 bool LinuxRawSocketTransport::sdoDownload(std::uint16_t slavePosition, const SdoAddress& address,
                                           const std::vector<std::uint8_t>& data, std::uint32_t& outAbortCode,
                                           std::string& outError) {
+    ++mailboxDiagnostics_.transactionsStarted;
     outAbortCode = 0U;
     outError.clear();
+    auto fail = [&]() -> bool {
+        ++mailboxDiagnostics_.transactionsFailed;
+        return false;
+    };
 
     if (socketFd_ < 0) {
         outError = "transport not open";
-        return false;
+        return fail();
     }
     const auto adp = toAutoIncrementAddress(slavePosition);
     std::uint16_t writeOffset = mailboxWriteOffset_;
@@ -1027,11 +1051,18 @@ bool LinuxRawSocketTransport::sdoDownload(std::uint16_t slavePosition, const Sdo
             }
             if (!isTransientMailboxTransportError(localError) || attempt == mailboxRetries) {
                 outError = localError;
+                if (isTransientMailboxTransportError(localError)) {
+                    ++mailboxDiagnostics_.mailboxTimeouts;
+                }
                 return false;
             }
+            ++mailboxDiagnostics_.datagramRetries;
             sleepMailboxBackoff(attempt, mailboxBackoffBaseMs, mailboxBackoffMaxMs);
         }
         outError = firstError.empty() ? "Mailbox datagram failed" : firstError;
+        if (isTransientMailboxTransportError(outError)) {
+            ++mailboxDiagnostics_.mailboxTimeouts;
+        }
         return false;
     };
 
@@ -1132,6 +1163,7 @@ bool LinuxRawSocketTransport::sdoDownload(std::uint16_t slavePosition, const Sdo
         if (!datagramWithRetry(req, wkc, payload)) {
             return false;
         }
+        ++mailboxDiagnostics_.mailboxWrites;
         lastWorkingCounter_ = wkc;
         return true;
     };
@@ -1163,6 +1195,7 @@ bool LinuxRawSocketTransport::sdoDownload(std::uint16_t slavePosition, const Sdo
             if (!datagramWithRetry(req, wkc, payload)) {
                 return false;
             }
+            ++mailboxDiagnostics_.mailboxReads;
             lastWorkingCounter_ = wkc;
 
             auto decoded = CoeMailboxProtocol::decodeEscMailbox(payload);
@@ -1177,28 +1210,33 @@ bool LinuxRawSocketTransport::sdoDownload(std::uint16_t slavePosition, const Sdo
             EmergencyMessage emergency {};
             if (CoeMailboxProtocol::parseEmergency(decoded->payload, slavePosition, emergency)) {
                 emergencies_.push(emergency);
+                ++mailboxDiagnostics_.emergencyQueued;
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
                 continue;
             }
             if ((decoded->counter & 0x07U) != (expectedCounter & 0x07U)) {
+                ++mailboxDiagnostics_.staleCounterDrops;
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
                 continue;
             }
             if (!accept(*decoded)) {
+                ++mailboxDiagnostics_.parseRejects;
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
                 continue;
             }
+            ++mailboxDiagnostics_.matchedResponses;
             outFrame = *decoded;
             return true;
         }
         outError = "Timed out waiting for CoE mailbox response";
+        ++mailboxDiagnostics_.mailboxTimeouts;
         return false;
     };
 
     std::uint8_t expectedCounter = 0U;
     if (!mailboxWrite(CoeMailboxProtocol::buildSdoInitiateDownloadRequest(
             address, static_cast<std::uint32_t>(data.size())), expectedCounter)) {
-        return false;
+        return fail();
     }
 
     EscMailboxFrame responseFrame;
@@ -1218,16 +1256,16 @@ bool LinuxRawSocketTransport::sdoDownload(std::uint16_t slavePosition, const Sdo
             }
             return false;
         }, responseFrame)) {
-        return false;
+        return fail();
     }
     if (fatalParseError) {
         outError = fatalParseReason;
-        return false;
+        return fail();
     }
     if (!ack.success) {
         outAbortCode = ack.abortCode;
         outError = ack.error;
-        return false;
+        return fail();
     }
 
     constexpr std::size_t kSegmentPayloadMax = 7;
@@ -1242,7 +1280,7 @@ bool LinuxRawSocketTransport::sdoDownload(std::uint16_t slavePosition, const Sdo
         expectedCounter = 0U;
         if (!mailboxWrite(CoeMailboxProtocol::buildSdoDownloadSegmentRequest(
                 toggle, lastSegment, segment, kSegmentPayloadMax), expectedCounter)) {
-            return false;
+            return fail();
         }
         fatalParseError = false;
         fatalParseReason.clear();
@@ -1259,16 +1297,16 @@ bool LinuxRawSocketTransport::sdoDownload(std::uint16_t slavePosition, const Sdo
                 }
                 return false;
             }, responseFrame)) {
-            return false;
+            return fail();
         }
         if (fatalParseError) {
             outError = fatalParseReason;
-            return false;
+            return fail();
         }
         if (!ack.success) {
             outAbortCode = ack.abortCode;
             outError = ack.error;
-            return false;
+            return fail();
         }
         offset += chunk;
         toggle ^= 0x01U;
@@ -1903,5 +1941,7 @@ bool LinuxRawSocketTransport::eoeReceive(std::uint16_t slavePosition, std::vecto
 
 std::string LinuxRawSocketTransport::lastError() const { return error_; }
 std::uint16_t LinuxRawSocketTransport::lastWorkingCounter() const { return lastWorkingCounter_; }
+MailboxDiagnostics LinuxRawSocketTransport::mailboxDiagnostics() const { return mailboxDiagnostics_; }
+void LinuxRawSocketTransport::resetMailboxDiagnostics() { mailboxDiagnostics_ = MailboxDiagnostics{}; }
 
 } // namespace oec
