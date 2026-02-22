@@ -180,6 +180,7 @@ sudo OEC_TRACE_MAP=1 OEC_TRACE_WKC=1 OEC_TRACE_OUTPUT_VERIFY=1 \
 - `docs/production-roadmap.md`: phased plan and acceptance gates for production readiness.
 - `docs/runtime-determinism.md`: RT scheduling/affinity/memory-lock guidance and Phase 2 KPI campaign recipe.
 - `docs/phase3-acceptance.md`: explicit Phase 3 software and physical validation checklist.
+- `docs/dependencies.md`: required/optional dependencies and install commands (Ubuntu/Raspberry Pi OS).
 
 ## Extension points
 
