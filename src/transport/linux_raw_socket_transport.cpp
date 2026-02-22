@@ -50,6 +50,7 @@ constexpr std::uint16_t kRegisterAlStatusCode = 0x0134;
 constexpr std::uint16_t kRegisterEscType = 0x0008;
 constexpr std::uint16_t kRegisterEscRevision = 0x000A;
 constexpr std::uint16_t kRegisterSmBase = 0x0800;
+constexpr std::uint16_t kRegisterSmStatusOffset = 0x0005;
 constexpr std::uint16_t kRegisterFmmuBase = 0x0600;
 constexpr std::uint16_t kRegisterEepControlStatus = 0x0502;
 constexpr std::uint16_t kRegisterEepAddress = 0x0504;
@@ -159,6 +160,19 @@ bool isIgnorableSdoParseError(const std::string& error) {
            (error.find("Unexpected SDO command") != std::string::npos) ||
            (error.find("address mismatch") != std::string::npos) ||
            (error.find("toggle mismatch") != std::string::npos);
+}
+
+bool isTransientMailboxTransportError(const std::string& error) {
+    return (error.find("timeout") != std::string::npos) ||
+           (error.find("response frame not found") != std::string::npos) ||
+           (error.find("select() failed") != std::string::npos) ||
+           (error.find("recv() failed") != std::string::npos);
+}
+
+void sleepMailboxBackoff(int attempt, int baseDelayMs, int maxDelayMs) {
+    const auto shift = std::min(attempt, 10);
+    const auto delay = std::min(maxDelayMs, baseDelayMs << shift);
+    std::this_thread::sleep_for(std::chrono::milliseconds(std::max(1, delay)));
 }
 
 bool sendAndReceiveDatagram(
@@ -663,6 +677,52 @@ bool LinuxRawSocketTransport::sdoUpload(std::uint16_t slavePosition, const SdoAd
     std::uint16_t writeSize = mailboxWriteSize_;
     std::uint16_t readOffset = mailboxReadOffset_;
     std::uint16_t readSize = mailboxReadSize_;
+    int mailboxRetries = 2;
+    int mailboxBackoffBaseMs = 1;
+    int mailboxBackoffMaxMs = 20;
+    if (const char* env = std::getenv("OEC_MAILBOX_RETRIES")) {
+        try {
+            mailboxRetries = std::max(0, std::stoi(env));
+        } catch (...) {
+            // Keep defaults if parsing fails.
+        }
+    }
+    if (const char* env = std::getenv("OEC_MAILBOX_BACKOFF_BASE_MS")) {
+        try {
+            mailboxBackoffBaseMs = std::max(1, std::stoi(env));
+        } catch (...) {
+        }
+    }
+    if (const char* env = std::getenv("OEC_MAILBOX_BACKOFF_MAX_MS")) {
+        try {
+            mailboxBackoffMaxMs = std::max(mailboxBackoffBaseMs, std::stoi(env));
+        } catch (...) {
+        }
+    }
+
+    auto datagramWithRetry = [&](const EthercatDatagramRequest& req,
+                                 std::uint16_t& outWkc,
+                                 std::vector<std::uint8_t>& outPayload) -> bool {
+        std::string firstError;
+        for (int attempt = 0; attempt <= mailboxRetries; ++attempt) {
+            std::string localError;
+            if (sendAndReceiveDatagram(socketFd_, ifIndex_, timeoutMs_, maxFramesPerCycle_,
+                                       expectedWorkingCounter_, destinationMac_, sourceMac_,
+                                       req, outWkc, outPayload, localError)) {
+                return true;
+            }
+            if (firstError.empty()) {
+                firstError = localError;
+            }
+            if (!isTransientMailboxTransportError(localError) || attempt == mailboxRetries) {
+                outError = localError;
+                return false;
+            }
+            sleepMailboxBackoff(attempt, mailboxBackoffBaseMs, mailboxBackoffMaxMs);
+        }
+        outError = firstError.empty() ? "Mailbox datagram failed" : firstError;
+        return false;
+    };
 
     auto readSmWindow = [&](std::uint8_t smIndex, std::uint16_t& outStart, std::uint16_t& outLen) -> bool {
         const auto currentIndex = datagramIndex_++;
@@ -675,9 +735,7 @@ bool LinuxRawSocketTransport::sdoUpload(std::uint16_t slavePosition, const SdoAd
 
         std::uint16_t wkc = 0;
         std::vector<std::uint8_t> payload;
-        if (!sendAndReceiveDatagram(socketFd_, ifIndex_, timeoutMs_, maxFramesPerCycle_,
-                                    expectedWorkingCounter_, destinationMac_, sourceMac_,
-                                    req, wkc, payload, outError)) {
+        if (!datagramWithRetry(req, wkc, payload)) {
             return false;
         }
         if (payload.size() < 4U) {
@@ -688,6 +746,27 @@ bool LinuxRawSocketTransport::sdoUpload(std::uint16_t slavePosition, const SdoAd
                    (static_cast<std::uint16_t>(payload[1]) << 8U);
         outLen = static_cast<std::uint16_t>(payload[2]) |
                  (static_cast<std::uint16_t>(payload[3]) << 8U);
+        return true;
+    };
+
+    auto readSmStatus = [&](std::uint8_t smIndex, std::uint8_t& outStatus) -> bool {
+        const auto currentIndex = datagramIndex_++;
+        EthercatDatagramRequest req;
+        req.command = kCommandAprd;
+        req.datagramIndex = currentIndex;
+        req.adp = adp;
+        req.ado = static_cast<std::uint16_t>(kRegisterSmBase + (smIndex * 8U) + kRegisterSmStatusOffset);
+        req.payload.assign(1U, 0U);
+
+        std::uint16_t wkc = 0;
+        std::vector<std::uint8_t> payload;
+        if (!datagramWithRetry(req, wkc, payload)) {
+            return false;
+        }
+        if (payload.empty()) {
+            return false;
+        }
+        outStatus = payload[0];
         return true;
     };
 
@@ -702,6 +781,18 @@ bool LinuxRawSocketTransport::sdoUpload(std::uint16_t slavePosition, const SdoAd
     }
 
     auto mailboxWrite = [&](const std::vector<std::uint8_t>& coePayload) -> bool {
+        // Status-driven gate: if SM0 reports mailbox full, briefly wait before writing.
+        for (int probe = 0; probe < 3; ++probe) {
+            std::uint8_t status = 0U;
+            if (!readSmStatus(0U, status)) {
+                break;
+            }
+            if ((status & 0x08U) == 0U) {
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+
         EscMailboxFrame frame;
         frame.channel = 0;
         frame.priority = 0;
@@ -725,9 +816,7 @@ bool LinuxRawSocketTransport::sdoUpload(std::uint16_t slavePosition, const SdoAd
 
         std::uint16_t wkc = 0;
         std::vector<std::uint8_t> payload;
-        if (!sendAndReceiveDatagram(socketFd_, ifIndex_, timeoutMs_, maxFramesPerCycle_,
-                                    expectedWorkingCounter_, destinationMac_, sourceMac_,
-                                    req, wkc, payload, outError)) {
+        if (!datagramWithRetry(req, wkc, payload)) {
             return false;
         }
         lastWorkingCounter_ = wkc;
@@ -736,7 +825,18 @@ bool LinuxRawSocketTransport::sdoUpload(std::uint16_t slavePosition, const SdoAd
 
     auto mailboxReadMatching = [&](auto&& accept, EscMailboxFrame& outFrame) -> bool {
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs_);
+        int idlePolls = 0;
         while (std::chrono::steady_clock::now() < deadline) {
+            // Status-driven gate: wait until SM1 indicates data, but still sample periodically
+            // to stay compatible with ESC variants where status semantics differ.
+            std::uint8_t status = 0U;
+            const bool haveStatus = readSmStatus(1U, status);
+            const bool mailboxHasData = haveStatus && ((status & 0x08U) != 0U);
+            if (!mailboxHasData && ((idlePolls++ % 3) != 0)) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                continue;
+            }
+
             const auto currentIndex = datagramIndex_++;
             EthercatDatagramRequest req;
             req.command = kCommandAprd;
@@ -747,9 +847,7 @@ bool LinuxRawSocketTransport::sdoUpload(std::uint16_t slavePosition, const SdoAd
 
             std::uint16_t wkc = 0;
             std::vector<std::uint8_t> payload;
-            if (!sendAndReceiveDatagram(socketFd_, ifIndex_, timeoutMs_, maxFramesPerCycle_,
-                                        expectedWorkingCounter_, destinationMac_, sourceMac_,
-                                        req, wkc, payload, outError)) {
+            if (!datagramWithRetry(req, wkc, payload)) {
                 return false;
             }
             lastWorkingCounter_ = wkc;
@@ -873,6 +971,52 @@ bool LinuxRawSocketTransport::sdoDownload(std::uint16_t slavePosition, const Sdo
     std::uint16_t writeSize = mailboxWriteSize_;
     std::uint16_t readOffset = mailboxReadOffset_;
     std::uint16_t readSize = mailboxReadSize_;
+    int mailboxRetries = 2;
+    int mailboxBackoffBaseMs = 1;
+    int mailboxBackoffMaxMs = 20;
+    if (const char* env = std::getenv("OEC_MAILBOX_RETRIES")) {
+        try {
+            mailboxRetries = std::max(0, std::stoi(env));
+        } catch (...) {
+            // Keep defaults if parsing fails.
+        }
+    }
+    if (const char* env = std::getenv("OEC_MAILBOX_BACKOFF_BASE_MS")) {
+        try {
+            mailboxBackoffBaseMs = std::max(1, std::stoi(env));
+        } catch (...) {
+        }
+    }
+    if (const char* env = std::getenv("OEC_MAILBOX_BACKOFF_MAX_MS")) {
+        try {
+            mailboxBackoffMaxMs = std::max(mailboxBackoffBaseMs, std::stoi(env));
+        } catch (...) {
+        }
+    }
+
+    auto datagramWithRetry = [&](const EthercatDatagramRequest& req,
+                                 std::uint16_t& outWkc,
+                                 std::vector<std::uint8_t>& outPayload) -> bool {
+        std::string firstError;
+        for (int attempt = 0; attempt <= mailboxRetries; ++attempt) {
+            std::string localError;
+            if (sendAndReceiveDatagram(socketFd_, ifIndex_, timeoutMs_, maxFramesPerCycle_,
+                                       expectedWorkingCounter_, destinationMac_, sourceMac_,
+                                       req, outWkc, outPayload, localError)) {
+                return true;
+            }
+            if (firstError.empty()) {
+                firstError = localError;
+            }
+            if (!isTransientMailboxTransportError(localError) || attempt == mailboxRetries) {
+                outError = localError;
+                return false;
+            }
+            sleepMailboxBackoff(attempt, mailboxBackoffBaseMs, mailboxBackoffMaxMs);
+        }
+        outError = firstError.empty() ? "Mailbox datagram failed" : firstError;
+        return false;
+    };
 
     auto readSmWindow = [&](std::uint8_t smIndex, std::uint16_t& outStart, std::uint16_t& outLen) -> bool {
         const auto currentIndex = datagramIndex_++;
@@ -885,9 +1029,7 @@ bool LinuxRawSocketTransport::sdoDownload(std::uint16_t slavePosition, const Sdo
 
         std::uint16_t wkc = 0;
         std::vector<std::uint8_t> payload;
-        if (!sendAndReceiveDatagram(socketFd_, ifIndex_, timeoutMs_, maxFramesPerCycle_,
-                                    expectedWorkingCounter_, destinationMac_, sourceMac_,
-                                    req, wkc, payload, outError)) {
+        if (!datagramWithRetry(req, wkc, payload)) {
             return false;
         }
         if (payload.size() < 4U) {
@@ -898,6 +1040,27 @@ bool LinuxRawSocketTransport::sdoDownload(std::uint16_t slavePosition, const Sdo
                    (static_cast<std::uint16_t>(payload[1]) << 8U);
         outLen = static_cast<std::uint16_t>(payload[2]) |
                  (static_cast<std::uint16_t>(payload[3]) << 8U);
+        return true;
+    };
+
+    auto readSmStatus = [&](std::uint8_t smIndex, std::uint8_t& outStatus) -> bool {
+        const auto currentIndex = datagramIndex_++;
+        EthercatDatagramRequest req;
+        req.command = kCommandAprd;
+        req.datagramIndex = currentIndex;
+        req.adp = adp;
+        req.ado = static_cast<std::uint16_t>(kRegisterSmBase + (smIndex * 8U) + kRegisterSmStatusOffset);
+        req.payload.assign(1U, 0U);
+
+        std::uint16_t wkc = 0;
+        std::vector<std::uint8_t> payload;
+        if (!datagramWithRetry(req, wkc, payload)) {
+            return false;
+        }
+        if (payload.empty()) {
+            return false;
+        }
+        outStatus = payload[0];
         return true;
     };
 
@@ -912,6 +1075,18 @@ bool LinuxRawSocketTransport::sdoDownload(std::uint16_t slavePosition, const Sdo
     }
 
     auto mailboxWrite = [&](const std::vector<std::uint8_t>& coePayload) -> bool {
+        // Status-driven gate: if SM0 reports mailbox full, briefly wait before writing.
+        for (int probe = 0; probe < 3; ++probe) {
+            std::uint8_t status = 0U;
+            if (!readSmStatus(0U, status)) {
+                break;
+            }
+            if ((status & 0x08U) == 0U) {
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+
         EscMailboxFrame frame;
         frame.channel = 0;
         frame.priority = 0;
@@ -935,9 +1110,7 @@ bool LinuxRawSocketTransport::sdoDownload(std::uint16_t slavePosition, const Sdo
 
         std::uint16_t wkc = 0;
         std::vector<std::uint8_t> payload;
-        if (!sendAndReceiveDatagram(socketFd_, ifIndex_, timeoutMs_, maxFramesPerCycle_,
-                                    expectedWorkingCounter_, destinationMac_, sourceMac_,
-                                    req, wkc, payload, outError)) {
+        if (!datagramWithRetry(req, wkc, payload)) {
             return false;
         }
         lastWorkingCounter_ = wkc;
@@ -946,7 +1119,18 @@ bool LinuxRawSocketTransport::sdoDownload(std::uint16_t slavePosition, const Sdo
 
     auto mailboxReadMatching = [&](auto&& accept, EscMailboxFrame& outFrame) -> bool {
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs_);
+        int idlePolls = 0;
         while (std::chrono::steady_clock::now() < deadline) {
+            // Status-driven gate: wait until SM1 indicates data, but still sample periodically
+            // to stay compatible with ESC variants where status semantics differ.
+            std::uint8_t status = 0U;
+            const bool haveStatus = readSmStatus(1U, status);
+            const bool mailboxHasData = haveStatus && ((status & 0x08U) != 0U);
+            if (!mailboxHasData && ((idlePolls++ % 3) != 0)) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                continue;
+            }
+
             const auto currentIndex = datagramIndex_++;
             EthercatDatagramRequest req;
             req.command = kCommandAprd;
@@ -957,9 +1141,7 @@ bool LinuxRawSocketTransport::sdoDownload(std::uint16_t slavePosition, const Sdo
 
             std::uint16_t wkc = 0;
             std::vector<std::uint8_t> payload;
-            if (!sendAndReceiveDatagram(socketFd_, ifIndex_, timeoutMs_, maxFramesPerCycle_,
-                                        expectedWorkingCounter_, destinationMac_, sourceMac_,
-                                        req, wkc, payload, outError)) {
+            if (!datagramWithRetry(req, wkc, payload)) {
                 return false;
             }
             lastWorkingCounter_ = wkc;

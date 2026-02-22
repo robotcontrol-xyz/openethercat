@@ -140,6 +140,9 @@ Use these environment variables when running Linux transport examples:
 - `OEC_TRACE_MAP=1`: prints startup SM/FMMU mapping details.
 - `OEC_TRACE_WKC=1`: prints cyclic WKC for each `LWR`/`LRD`.
 - `OEC_TRACE_OUTPUT_VERIFY=1`: reads back output process RAM from mapped `SM2` windows (via `APRD`), compares bytes against commanded output process-image bytes, and helps separate "master sent wrong data" from "output stage/power/wiring is not driving field signal."
+- `OEC_MAILBOX_RETRIES=<N>`: retry count for transient mailbox datagram failures (default `2`).
+- `OEC_MAILBOX_BACKOFF_BASE_MS=<ms>`: base delay for mailbox retry backoff (default `1` ms).
+- `OEC_MAILBOX_BACKOFF_MAX_MS=<ms>`: cap for mailbox retry backoff (default `20` ms).
 
 Typical command:
 
