@@ -28,6 +28,10 @@ add_library(openethercat
     src/config/config_validator.cpp
     src/config/recovery_profile_loader.cpp
     src/transport/linux_raw_socket_transport.cpp
+    src/transport/linux_raw_socket_transport_mailbox.cpp
+    src/transport/linux_raw_socket_transport_foe_eoe.cpp
+    src/transport/linux_raw_socket_transport_topology.cpp
+    src/transport/linux_raw_socket_transport_process_image.cpp
     src/transport/coe_mailbox_protocol.cpp
     src/transport/ethercat_frame.cpp
     src/transport/mock_transport.cpp

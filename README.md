@@ -246,6 +246,7 @@ sudo OEC_TRACE_MAP=1 OEC_TRACE_WKC=1 OEC_TRACE_OUTPUT_VERIFY=1 \
 - `docs/runtime-determinism.md`: RT scheduling/affinity/memory-lock guidance and Phase 2 KPI campaign recipe.
 - `docs/phase3-acceptance.md`: explicit Phase 3 software and physical validation checklist.
 - `docs/dependencies.md`: required/optional dependencies and install commands (Ubuntu/Raspberry Pi OS).
+- `docs/linux-transport-refactor-strategy.md`: SOLID/pattern guardrails for Linux transport refactoring.
 - `docs/ethercat-for-dummies.md`: beginner-friendly mini-book connecting EtherCAT fundamentals to this stack.
 
 ## Extension points

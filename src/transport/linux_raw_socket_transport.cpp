@@ -10,14 +10,10 @@
 #include <cstring>
 #include <cstdlib>
 #include <iostream>
-#include <unordered_map>
-#include <unordered_set>
 #include <string>
 #include <vector>
 #include <chrono>
 #include <thread>
-#include <map>
-#include <functional>
 
 #include <linux/if_packet.h>
 #include <net/if.h>
@@ -29,9 +25,6 @@
 
 #include "openethercat/transport/ethercat_frame.hpp"
 #include "openethercat/master/coe_mailbox.hpp"
-#include "openethercat/master/foe_eoe.hpp"
-#include "openethercat/master/topology_manager.hpp"
-#include "openethercat/config/eni_esi_models.hpp"
 #include "openethercat/transport/coe_mailbox_protocol.hpp"
 
 namespace oec {
@@ -50,28 +43,8 @@ constexpr std::uint16_t kRegisterAlStatus = 0x0130;
 constexpr std::uint16_t kRegisterAlStatusCode = 0x0134;
 constexpr std::uint16_t kRegisterDcSystemTime = 0x0910;
 constexpr std::uint16_t kRegisterDcSystemTimeOffset = 0x0920;
-constexpr std::uint16_t kRegisterEscType = 0x0008;
-constexpr std::uint16_t kRegisterEscRevision = 0x000A;
 constexpr std::uint16_t kRegisterSmBase = 0x0800;
-constexpr std::uint16_t kRegisterSmStatusOffset = 0x0005;
-constexpr std::uint16_t kRegisterFmmuBase = 0x0600;
-constexpr std::uint16_t kRegisterEepControlStatus = 0x0502;
-constexpr std::uint16_t kRegisterEepAddress = 0x0504;
-constexpr std::uint16_t kRegisterEepData = 0x0508;
-constexpr std::uint16_t kEepCommandRead = 0x0100;
-constexpr std::uint16_t kEepBusy = 0x8000;
-constexpr std::uint16_t kEepErrorMask = 0x7800;
-constexpr std::uint16_t kSiiWordVendorId = 0x0008;
-constexpr std::uint16_t kSiiWordProductCode = 0x000A;
 constexpr std::uint16_t kAlStateMask = 0x000F;
-constexpr std::uint8_t kMailboxTypeEoe = 0x02U;
-constexpr std::uint8_t kMailboxTypeFoe = 0x04U;
-constexpr std::uint16_t kFoeOpReadReq = 0x0001U;
-constexpr std::uint16_t kFoeOpWriteReq = 0x0002U;
-constexpr std::uint16_t kFoeOpData = 0x0003U;
-constexpr std::uint16_t kFoeOpAck = 0x0004U;
-constexpr std::uint16_t kFoeOpErr = 0x0005U;
-constexpr std::uint16_t kFoeOpBusy = 0x0006U;
 
 bool sendAndReceiveDatagram(
     int socketFd,
@@ -244,25 +217,6 @@ void sleepMailboxBackoff(int attempt, int baseDelayMs, int maxDelayMs) {
 std::uint16_t readLe16Raw(const std::vector<std::uint8_t>& in, std::size_t offset) {
     return static_cast<std::uint16_t>(static_cast<std::uint16_t>(in[offset]) |
                                       (static_cast<std::uint16_t>(in[offset + 1]) << 8U));
-}
-
-std::uint32_t readLe32Raw(const std::vector<std::uint8_t>& in, std::size_t offset) {
-    return static_cast<std::uint32_t>(static_cast<std::uint32_t>(in[offset]) |
-                                      (static_cast<std::uint32_t>(in[offset + 1]) << 8U) |
-                                      (static_cast<std::uint32_t>(in[offset + 2]) << 16U) |
-                                      (static_cast<std::uint32_t>(in[offset + 3]) << 24U));
-}
-
-void appendLe16Raw(std::vector<std::uint8_t>& out, std::uint16_t value) {
-    out.push_back(static_cast<std::uint8_t>(value & 0xFFU));
-    out.push_back(static_cast<std::uint8_t>((value >> 8U) & 0xFFU));
-}
-
-void appendLe32Raw(std::vector<std::uint8_t>& out, std::uint32_t value) {
-    out.push_back(static_cast<std::uint8_t>(value & 0xFFU));
-    out.push_back(static_cast<std::uint8_t>((value >> 8U) & 0xFFU));
-    out.push_back(static_cast<std::uint8_t>((value >> 16U) & 0xFFU));
-    out.push_back(static_cast<std::uint8_t>((value >> 24U) & 0xFFU));
 }
 
 bool readMailboxSmWindow(int socketFd,
@@ -1002,145 +956,23 @@ bool LinuxRawSocketTransport::sdoUpload(std::uint16_t slavePosition, const SdoAd
         return fail();
     }
     const auto statusMode = mailboxStatusMode_;
-    auto enqueueEmergency = [&](const EmergencyMessage& emergency) {
-        if (emergencies_.size() >= emergencyQueueLimit_) {
-            emergencies_.pop();
-            ++mailboxDiagnostics_.emergencyDropped;
-        }
-        emergencies_.push(emergency);
-        ++mailboxDiagnostics_.emergencyQueued;
-    };
     const auto adp = toAutoIncrementAddress(slavePosition);
     std::uint16_t writeOffset = mailboxWriteOffset_;
     std::uint16_t writeSize = mailboxWriteSize_;
     std::uint16_t readOffset = mailboxReadOffset_;
     std::uint16_t readSize = mailboxReadSize_;
-    int mailboxRetries = 2;
-    int mailboxBackoffBaseMs = 1;
-    int mailboxBackoffMaxMs = 20;
-    if (const char* env = std::getenv("OEC_MAILBOX_RETRIES")) {
-        try {
-            mailboxRetries = std::max(0, std::stoi(env));
-        } catch (...) {
-            // Keep defaults if parsing fails.
-        }
-    }
-    if (const char* env = std::getenv("OEC_MAILBOX_BACKOFF_BASE_MS")) {
-        try {
-            mailboxBackoffBaseMs = std::max(1, std::stoi(env));
-        } catch (...) {
-        }
-    }
-    if (const char* env = std::getenv("OEC_MAILBOX_BACKOFF_MAX_MS")) {
-        try {
-            mailboxBackoffMaxMs = std::max(mailboxBackoffBaseMs, std::stoi(env));
-        } catch (...) {
-        }
-    }
-
-    auto datagramWithRetry = [&](const EthercatDatagramRequest& req,
-                                 std::uint16_t& outWkc,
-                                 std::vector<std::uint8_t>& outPayload) -> bool {
-        (void)req;
-        (void)outWkc;
-        (void)outPayload;
-        std::string firstError;
-        if (forceTimeoutTest) {
-            for (int attempt = 0; attempt <= mailboxRetries; ++attempt) {
-                const std::string localError = "Timed out waiting for CoE mailbox response";
-                if (firstError.empty()) {
-                    firstError = localError;
-                }
-                if (attempt == mailboxRetries) {
-                    outError = localError;
-                    ++mailboxDiagnostics_.mailboxTimeouts;
-                    setTxErrorClass(MailboxErrorClass::Timeout);
-                    return false;
-                }
-                ++mailboxDiagnostics_.datagramRetries;
-                sleepMailboxBackoff(attempt, mailboxBackoffBaseMs, mailboxBackoffMaxMs);
-            }
-        }
-        for (int attempt = 0; attempt <= mailboxRetries; ++attempt) {
-            std::string localError;
-            if (sendAndReceiveDatagram(socketFd_, ifIndex_, timeoutMs_, maxFramesPerCycle_,
-                                       expectedWorkingCounter_, destinationMac_, sourceMac_,
-                                       req, outWkc, outPayload, localError)) {
-                return true;
-            }
-            if (firstError.empty()) {
-                firstError = localError;
-            }
-            if (!isTransientMailboxTransportError(localError) || attempt == mailboxRetries) {
-                outError = localError;
-                if (isTransientMailboxTransportError(localError)) {
-                    ++mailboxDiagnostics_.mailboxTimeouts;
-                }
-                setTxErrorClass(classifyMailboxError(localError));
-                return false;
-            }
-            ++mailboxDiagnostics_.datagramRetries;
-            sleepMailboxBackoff(attempt, mailboxBackoffBaseMs, mailboxBackoffMaxMs);
-        }
-        outError = firstError.empty() ? "Mailbox datagram failed" : firstError;
-        if (isTransientMailboxTransportError(outError)) {
-            ++mailboxDiagnostics_.mailboxTimeouts;
-            setTxErrorClass(MailboxErrorClass::Timeout);
-        } else {
-            setTxErrorClass(classifyMailboxError(outError));
-        }
-        return false;
-    };
-
-    auto readSmWindow = [&](std::uint8_t smIndex, std::uint16_t& outStart, std::uint16_t& outLen) -> bool {
-        const auto currentIndex = datagramIndex_++;
-        EthercatDatagramRequest req;
-        req.command = kCommandAprd;
-        req.datagramIndex = currentIndex;
-        req.adp = adp;
-        req.ado = static_cast<std::uint16_t>(kRegisterSmBase + (smIndex * 8U));
-        req.payload.assign(8U, 0U);
-
-        std::uint16_t wkc = 0;
-        std::vector<std::uint8_t> payload;
-        if (!datagramWithRetry(req, wkc, payload)) {
-            return false;
-        }
-        if (payload.size() < 4U) {
-            outError = "SM payload too short for mailbox";
-            return false;
-        }
-        outStart = static_cast<std::uint16_t>(payload[0]) |
-                   (static_cast<std::uint16_t>(payload[1]) << 8U);
-        outLen = static_cast<std::uint16_t>(payload[2]) |
-                 (static_cast<std::uint16_t>(payload[3]) << 8U);
-        return true;
-    };
-
-    auto readSmStatus = [&](std::uint8_t smIndex, std::uint8_t& outStatus) -> bool {
-        const auto currentIndex = datagramIndex_++;
-        EthercatDatagramRequest req;
-        req.command = kCommandAprd;
-        req.datagramIndex = currentIndex;
-        req.adp = adp;
-        req.ado = static_cast<std::uint16_t>(kRegisterSmBase + (smIndex * 8U) + kRegisterSmStatusOffset);
-        req.payload.assign(1U, 0U);
-
-        std::uint16_t wkc = 0;
-        std::vector<std::uint8_t> payload;
-        if (!datagramWithRetry(req, wkc, payload)) {
-            return false;
-        }
-        if (payload.empty()) {
-            return false;
-        }
-        outStatus = payload[0];
-        return true;
-    };
+    const auto retryConfig = mailboxRetryConfigFromEnv();
+    const int mailboxRetries = retryConfig.retries;
+    const int mailboxBackoffBaseMs = retryConfig.backoffBaseMs;
+    const int mailboxBackoffMaxMs = retryConfig.backoffMaxMs;
 
     // Resolve mailbox windows from SM0/SM1 if available.
     std::uint16_t sm0Start = 0U, sm0Len = 0U, sm1Start = 0U, sm1Len = 0U;
-    if (readSmWindow(0U, sm0Start, sm0Len) && readSmWindow(1U, sm1Start, sm1Len) &&
+    MailboxErrorClass ioClass = MailboxErrorClass::None;
+    if (readSmWindowWithRetry(adp, 0U, forceTimeoutTest, mailboxRetries, mailboxBackoffBaseMs,
+                              mailboxBackoffMaxMs, ioClass, sm0Start, sm0Len, outError) &&
+        readSmWindowWithRetry(adp, 1U, forceTimeoutTest, mailboxRetries, mailboxBackoffBaseMs,
+                              mailboxBackoffMaxMs, ioClass, sm1Start, sm1Len, outError) &&
         sm0Len > 0U && sm1Len > 0U) {
         writeOffset = sm0Start;
         writeSize = sm0Len;
@@ -1150,142 +982,14 @@ bool LinuxRawSocketTransport::sdoUpload(std::uint16_t slavePosition, const SdoAd
 
     auto mailboxWrite = [&](const std::vector<std::uint8_t>& coePayload,
                             std::uint8_t& outCounter) -> bool {
-        // Status-driven gate: configurable strategy to accommodate ESC variant differences.
-        if (statusMode != MailboxStatusMode::Poll) {
-            bool writeReady = false;
-            for (int probe = 0; probe < 3; ++probe) {
-                std::uint8_t status = 0U;
-                if (!readSmStatus(0U, status)) {
-                    if (statusMode == MailboxStatusMode::Strict) {
-                        outError = "SM0 status read failed in strict mode";
-                        setTxErrorClass(MailboxErrorClass::Busy);
-                        return false;
-                    }
-                    break;
-                }
-                if ((status & 0x08U) == 0U) {
-                    writeReady = true;
-                    break;
-                }
-                std::this_thread::sleep_for(std::chrono::milliseconds(1));
-            }
-            if (statusMode == MailboxStatusMode::Strict && !writeReady) {
-                outError = "SM0 mailbox remained busy in strict mode";
-                setTxErrorClass(MailboxErrorClass::Busy);
-                return false;
-            }
+        MailboxErrorClass localClass = MailboxErrorClass::None;
+        const bool ok = mailboxWriteCoePayload(adp, writeOffset, writeSize, statusMode, forceTimeoutTest,
+                                               mailboxRetries, mailboxBackoffBaseMs, mailboxBackoffMaxMs, coePayload,
+                                               outCounter, localClass, outError);
+        if (!ok) {
+            setTxErrorClass(localClass);
         }
-
-        EscMailboxFrame frame;
-        frame.channel = 0;
-        frame.priority = 0;
-        frame.type = CoeMailboxProtocol::kMailboxTypeCoe;
-        frame.counter = static_cast<std::uint8_t>(mailboxCounter_++ & 0x07U);
-        outCounter = frame.counter;
-        frame.payload = coePayload;
-        auto bytes = CoeMailboxProtocol::encodeEscMailbox(frame);
-        if (bytes.size() > writeSize) {
-            outError = "CoE mailbox payload too large for configured write mailbox";
-            return false;
-        }
-        bytes.resize(writeSize, 0U);
-
-        const auto currentIndex = datagramIndex_++;
-        EthercatDatagramRequest req;
-        req.command = kCommandApwr;
-        req.datagramIndex = currentIndex;
-        req.adp = adp;
-        req.ado = writeOffset;
-        req.payload = bytes;
-
-        std::uint16_t wkc = 0;
-        std::vector<std::uint8_t> payload;
-        if (!datagramWithRetry(req, wkc, payload)) {
-            return false;
-        }
-        ++mailboxDiagnostics_.mailboxWrites;
-        lastWorkingCounter_ = wkc;
-        return true;
-    };
-
-    auto mailboxReadMatching = [&](std::uint8_t expectedCounter, auto&& accept, EscMailboxFrame& outFrame) -> bool {
-        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs_);
-        int idlePolls = 0;
-        while (std::chrono::steady_clock::now() < deadline) {
-            if (statusMode != MailboxStatusMode::Poll) {
-                // Status-driven read gate with strict/hybrid policies.
-                std::uint8_t status = 0U;
-                const bool haveStatus = readSmStatus(1U, status);
-                const bool mailboxHasData = haveStatus && ((status & 0x08U) != 0U);
-                if (statusMode == MailboxStatusMode::Strict) {
-                    if (!haveStatus) {
-                        outError = "SM1 status read failed in strict mode";
-                        setTxErrorClass(MailboxErrorClass::Busy);
-                        return false;
-                    }
-                    if (!mailboxHasData) {
-                        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-                        continue;
-                    }
-                } else if (!mailboxHasData && ((idlePolls++ % 3) != 0)) {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
-                    continue;
-                }
-            }
-
-            const auto currentIndex = datagramIndex_++;
-            EthercatDatagramRequest req;
-            req.command = kCommandAprd;
-            req.datagramIndex = currentIndex;
-            req.adp = adp;
-            req.ado = readOffset;
-            req.payload.assign(readSize, 0U);
-
-            std::uint16_t wkc = 0;
-            std::vector<std::uint8_t> payload;
-            if (!datagramWithRetry(req, wkc, payload)) {
-                return false;
-            }
-            ++mailboxDiagnostics_.mailboxReads;
-            lastWorkingCounter_ = wkc;
-
-            auto decoded = CoeMailboxProtocol::decodeEscMailbox(payload);
-            if (!decoded) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(1));
-                continue;
-            }
-            if (decoded->type != CoeMailboxProtocol::kMailboxTypeCoe) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(1));
-                continue;
-            }
-            EmergencyMessage emergency {};
-            if (CoeMailboxProtocol::parseEmergency(decoded->payload, slavePosition, emergency)) {
-                enqueueEmergency(emergency);
-                std::this_thread::sleep_for(std::chrono::milliseconds(1));
-                continue;
-            }
-            if ((decoded->counter & 0x07U) != (expectedCounter & 0x07U)) {
-                ++mailboxDiagnostics_.staleCounterDrops;
-                setTxErrorClass(MailboxErrorClass::StaleCounter);
-                std::this_thread::sleep_for(std::chrono::milliseconds(1));
-                continue;
-            }
-            if (!accept(*decoded)) {
-                ++mailboxDiagnostics_.parseRejects;
-                setTxErrorClass(MailboxErrorClass::ParseReject);
-                std::this_thread::sleep_for(std::chrono::milliseconds(1));
-                continue;
-            }
-            ++mailboxDiagnostics_.matchedResponses;
-            outFrame = *decoded;
-            return true;
-        }
-        outError = "Timed out waiting for CoE mailbox response";
-        ++mailboxDiagnostics_.mailboxTimeouts;
-        if (txErrorClass == MailboxErrorClass::None) {
-            setTxErrorClass(MailboxErrorClass::Timeout);
-        }
-        return false;
+        return ok;
     };
 
     std::uint8_t expectedCounter = 0U;
@@ -1297,7 +1001,10 @@ bool LinuxRawSocketTransport::sdoUpload(std::uint16_t slavePosition, const SdoAd
     CoeSdoInitiateUploadResponse init;
     bool fatalParseError = false;
     std::string fatalParseReason;
-    if (!mailboxReadMatching(expectedCounter, [&](const EscMailboxFrame& frame) -> bool {
+    MailboxErrorClass readClass = MailboxErrorClass::None;
+    if (!mailboxReadMatchingCoe(adp, slavePosition, readOffset, readSize, statusMode, forceTimeoutTest,
+                                mailboxRetries, mailboxBackoffBaseMs, mailboxBackoffMaxMs, expectedCounter,
+                                [&](const EscMailboxFrame& frame) -> bool {
             auto parsed = CoeMailboxProtocol::parseSdoInitiateUploadResponse(frame.payload, address);
             if (parsed.success || parsed.error == "SDO abort") {
                 init = std::move(parsed);
@@ -1309,7 +1016,8 @@ bool LinuxRawSocketTransport::sdoUpload(std::uint16_t slavePosition, const SdoAd
                 return true;
             }
             return false;
-        }, responseFrame)) {
+        }, responseFrame, readClass, outError)) {
+        setTxErrorClass(readClass);
         return fail();
     }
     if (fatalParseError) {
@@ -1340,7 +1048,10 @@ bool LinuxRawSocketTransport::sdoUpload(std::uint16_t slavePosition, const SdoAd
         CoeSdoSegmentUploadResponse seg;
         fatalParseError = false;
         fatalParseReason.clear();
-        if (!mailboxReadMatching(expectedCounter, [&](const EscMailboxFrame& frame) -> bool {
+        readClass = MailboxErrorClass::None;
+        if (!mailboxReadMatchingCoe(adp, slavePosition, readOffset, readSize, statusMode, forceTimeoutTest,
+                                    mailboxRetries, mailboxBackoffBaseMs, mailboxBackoffMaxMs, expectedCounter,
+                                    [&](const EscMailboxFrame& frame) -> bool {
                 auto parsed = CoeMailboxProtocol::parseSdoUploadSegmentResponse(frame.payload);
                 if (parsed.success && parsed.toggle == toggle) {
                     seg = std::move(parsed);
@@ -1356,7 +1067,8 @@ bool LinuxRawSocketTransport::sdoUpload(std::uint16_t slavePosition, const SdoAd
                     return true;
                 }
                 return false;
-            }, responseFrame)) {
+            }, responseFrame, readClass, outError)) {
+            setTxErrorClass(readClass);
             return fail();
         }
         if (fatalParseError) {
@@ -1415,145 +1127,23 @@ bool LinuxRawSocketTransport::sdoDownload(std::uint16_t slavePosition, const Sdo
         return fail();
     }
     const auto statusMode = mailboxStatusMode_;
-    auto enqueueEmergency = [&](const EmergencyMessage& emergency) {
-        if (emergencies_.size() >= emergencyQueueLimit_) {
-            emergencies_.pop();
-            ++mailboxDiagnostics_.emergencyDropped;
-        }
-        emergencies_.push(emergency);
-        ++mailboxDiagnostics_.emergencyQueued;
-    };
     const auto adp = toAutoIncrementAddress(slavePosition);
     std::uint16_t writeOffset = mailboxWriteOffset_;
     std::uint16_t writeSize = mailboxWriteSize_;
     std::uint16_t readOffset = mailboxReadOffset_;
     std::uint16_t readSize = mailboxReadSize_;
-    int mailboxRetries = 2;
-    int mailboxBackoffBaseMs = 1;
-    int mailboxBackoffMaxMs = 20;
-    if (const char* env = std::getenv("OEC_MAILBOX_RETRIES")) {
-        try {
-            mailboxRetries = std::max(0, std::stoi(env));
-        } catch (...) {
-            // Keep defaults if parsing fails.
-        }
-    }
-    if (const char* env = std::getenv("OEC_MAILBOX_BACKOFF_BASE_MS")) {
-        try {
-            mailboxBackoffBaseMs = std::max(1, std::stoi(env));
-        } catch (...) {
-        }
-    }
-    if (const char* env = std::getenv("OEC_MAILBOX_BACKOFF_MAX_MS")) {
-        try {
-            mailboxBackoffMaxMs = std::max(mailboxBackoffBaseMs, std::stoi(env));
-        } catch (...) {
-        }
-    }
-
-    auto datagramWithRetry = [&](const EthercatDatagramRequest& req,
-                                 std::uint16_t& outWkc,
-                                 std::vector<std::uint8_t>& outPayload) -> bool {
-        (void)req;
-        (void)outWkc;
-        (void)outPayload;
-        std::string firstError;
-        if (forceTimeoutTest) {
-            for (int attempt = 0; attempt <= mailboxRetries; ++attempt) {
-                const std::string localError = "Timed out waiting for CoE mailbox response";
-                if (firstError.empty()) {
-                    firstError = localError;
-                }
-                if (attempt == mailboxRetries) {
-                    outError = localError;
-                    ++mailboxDiagnostics_.mailboxTimeouts;
-                    setTxErrorClass(MailboxErrorClass::Timeout);
-                    return false;
-                }
-                ++mailboxDiagnostics_.datagramRetries;
-                sleepMailboxBackoff(attempt, mailboxBackoffBaseMs, mailboxBackoffMaxMs);
-            }
-        }
-        for (int attempt = 0; attempt <= mailboxRetries; ++attempt) {
-            std::string localError;
-            if (sendAndReceiveDatagram(socketFd_, ifIndex_, timeoutMs_, maxFramesPerCycle_,
-                                       expectedWorkingCounter_, destinationMac_, sourceMac_,
-                                       req, outWkc, outPayload, localError)) {
-                return true;
-            }
-            if (firstError.empty()) {
-                firstError = localError;
-            }
-            if (!isTransientMailboxTransportError(localError) || attempt == mailboxRetries) {
-                outError = localError;
-                if (isTransientMailboxTransportError(localError)) {
-                    ++mailboxDiagnostics_.mailboxTimeouts;
-                }
-                setTxErrorClass(classifyMailboxError(localError));
-                return false;
-            }
-            ++mailboxDiagnostics_.datagramRetries;
-            sleepMailboxBackoff(attempt, mailboxBackoffBaseMs, mailboxBackoffMaxMs);
-        }
-        outError = firstError.empty() ? "Mailbox datagram failed" : firstError;
-        if (isTransientMailboxTransportError(outError)) {
-            ++mailboxDiagnostics_.mailboxTimeouts;
-            setTxErrorClass(MailboxErrorClass::Timeout);
-        } else {
-            setTxErrorClass(classifyMailboxError(outError));
-        }
-        return false;
-    };
-
-    auto readSmWindow = [&](std::uint8_t smIndex, std::uint16_t& outStart, std::uint16_t& outLen) -> bool {
-        const auto currentIndex = datagramIndex_++;
-        EthercatDatagramRequest req;
-        req.command = kCommandAprd;
-        req.datagramIndex = currentIndex;
-        req.adp = adp;
-        req.ado = static_cast<std::uint16_t>(kRegisterSmBase + (smIndex * 8U));
-        req.payload.assign(8U, 0U);
-
-        std::uint16_t wkc = 0;
-        std::vector<std::uint8_t> payload;
-        if (!datagramWithRetry(req, wkc, payload)) {
-            return false;
-        }
-        if (payload.size() < 4U) {
-            outError = "SM payload too short for mailbox";
-            return false;
-        }
-        outStart = static_cast<std::uint16_t>(payload[0]) |
-                   (static_cast<std::uint16_t>(payload[1]) << 8U);
-        outLen = static_cast<std::uint16_t>(payload[2]) |
-                 (static_cast<std::uint16_t>(payload[3]) << 8U);
-        return true;
-    };
-
-    auto readSmStatus = [&](std::uint8_t smIndex, std::uint8_t& outStatus) -> bool {
-        const auto currentIndex = datagramIndex_++;
-        EthercatDatagramRequest req;
-        req.command = kCommandAprd;
-        req.datagramIndex = currentIndex;
-        req.adp = adp;
-        req.ado = static_cast<std::uint16_t>(kRegisterSmBase + (smIndex * 8U) + kRegisterSmStatusOffset);
-        req.payload.assign(1U, 0U);
-
-        std::uint16_t wkc = 0;
-        std::vector<std::uint8_t> payload;
-        if (!datagramWithRetry(req, wkc, payload)) {
-            return false;
-        }
-        if (payload.empty()) {
-            return false;
-        }
-        outStatus = payload[0];
-        return true;
-    };
+    const auto retryConfig = mailboxRetryConfigFromEnv();
+    const int mailboxRetries = retryConfig.retries;
+    const int mailboxBackoffBaseMs = retryConfig.backoffBaseMs;
+    const int mailboxBackoffMaxMs = retryConfig.backoffMaxMs;
 
     // Resolve mailbox windows from SM0/SM1 if available.
     std::uint16_t sm0Start = 0U, sm0Len = 0U, sm1Start = 0U, sm1Len = 0U;
-    if (readSmWindow(0U, sm0Start, sm0Len) && readSmWindow(1U, sm1Start, sm1Len) &&
+    MailboxErrorClass ioClass = MailboxErrorClass::None;
+    if (readSmWindowWithRetry(adp, 0U, forceTimeoutTest, mailboxRetries, mailboxBackoffBaseMs,
+                              mailboxBackoffMaxMs, ioClass, sm0Start, sm0Len, outError) &&
+        readSmWindowWithRetry(adp, 1U, forceTimeoutTest, mailboxRetries, mailboxBackoffBaseMs,
+                              mailboxBackoffMaxMs, ioClass, sm1Start, sm1Len, outError) &&
         sm0Len > 0U && sm1Len > 0U) {
         writeOffset = sm0Start;
         writeSize = sm0Len;
@@ -1563,142 +1153,14 @@ bool LinuxRawSocketTransport::sdoDownload(std::uint16_t slavePosition, const Sdo
 
     auto mailboxWrite = [&](const std::vector<std::uint8_t>& coePayload,
                             std::uint8_t& outCounter) -> bool {
-        // Status-driven gate: configurable strategy to accommodate ESC variant differences.
-        if (statusMode != MailboxStatusMode::Poll) {
-            bool writeReady = false;
-            for (int probe = 0; probe < 3; ++probe) {
-                std::uint8_t status = 0U;
-                if (!readSmStatus(0U, status)) {
-                    if (statusMode == MailboxStatusMode::Strict) {
-                        outError = "SM0 status read failed in strict mode";
-                        setTxErrorClass(MailboxErrorClass::Busy);
-                        return false;
-                    }
-                    break;
-                }
-                if ((status & 0x08U) == 0U) {
-                    writeReady = true;
-                    break;
-                }
-                std::this_thread::sleep_for(std::chrono::milliseconds(1));
-            }
-            if (statusMode == MailboxStatusMode::Strict && !writeReady) {
-                outError = "SM0 mailbox remained busy in strict mode";
-                setTxErrorClass(MailboxErrorClass::Busy);
-                return false;
-            }
+        MailboxErrorClass localClass = MailboxErrorClass::None;
+        const bool ok = mailboxWriteCoePayload(adp, writeOffset, writeSize, statusMode, forceTimeoutTest,
+                                               mailboxRetries, mailboxBackoffBaseMs, mailboxBackoffMaxMs, coePayload,
+                                               outCounter, localClass, outError);
+        if (!ok) {
+            setTxErrorClass(localClass);
         }
-
-        EscMailboxFrame frame;
-        frame.channel = 0;
-        frame.priority = 0;
-        frame.type = CoeMailboxProtocol::kMailboxTypeCoe;
-        frame.counter = static_cast<std::uint8_t>(mailboxCounter_++ & 0x07U);
-        outCounter = frame.counter;
-        frame.payload = coePayload;
-        auto bytes = CoeMailboxProtocol::encodeEscMailbox(frame);
-        if (bytes.size() > writeSize) {
-            outError = "CoE mailbox payload too large for configured write mailbox";
-            return false;
-        }
-        bytes.resize(writeSize, 0U);
-
-        const auto currentIndex = datagramIndex_++;
-        EthercatDatagramRequest req;
-        req.command = kCommandApwr;
-        req.datagramIndex = currentIndex;
-        req.adp = adp;
-        req.ado = writeOffset;
-        req.payload = bytes;
-
-        std::uint16_t wkc = 0;
-        std::vector<std::uint8_t> payload;
-        if (!datagramWithRetry(req, wkc, payload)) {
-            return false;
-        }
-        ++mailboxDiagnostics_.mailboxWrites;
-        lastWorkingCounter_ = wkc;
-        return true;
-    };
-
-    auto mailboxReadMatching = [&](std::uint8_t expectedCounter, auto&& accept, EscMailboxFrame& outFrame) -> bool {
-        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs_);
-        int idlePolls = 0;
-        while (std::chrono::steady_clock::now() < deadline) {
-            if (statusMode != MailboxStatusMode::Poll) {
-                // Status-driven read gate with strict/hybrid policies.
-                std::uint8_t status = 0U;
-                const bool haveStatus = readSmStatus(1U, status);
-                const bool mailboxHasData = haveStatus && ((status & 0x08U) != 0U);
-                if (statusMode == MailboxStatusMode::Strict) {
-                    if (!haveStatus) {
-                        outError = "SM1 status read failed in strict mode";
-                        setTxErrorClass(MailboxErrorClass::Busy);
-                        return false;
-                    }
-                    if (!mailboxHasData) {
-                        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-                        continue;
-                    }
-                } else if (!mailboxHasData && ((idlePolls++ % 3) != 0)) {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
-                    continue;
-                }
-            }
-
-            const auto currentIndex = datagramIndex_++;
-            EthercatDatagramRequest req;
-            req.command = kCommandAprd;
-            req.datagramIndex = currentIndex;
-            req.adp = adp;
-            req.ado = readOffset;
-            req.payload.assign(readSize, 0U);
-
-            std::uint16_t wkc = 0;
-            std::vector<std::uint8_t> payload;
-            if (!datagramWithRetry(req, wkc, payload)) {
-                return false;
-            }
-            ++mailboxDiagnostics_.mailboxReads;
-            lastWorkingCounter_ = wkc;
-
-            auto decoded = CoeMailboxProtocol::decodeEscMailbox(payload);
-            if (!decoded) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(1));
-                continue;
-            }
-            if (decoded->type != CoeMailboxProtocol::kMailboxTypeCoe) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(1));
-                continue;
-            }
-            EmergencyMessage emergency {};
-            if (CoeMailboxProtocol::parseEmergency(decoded->payload, slavePosition, emergency)) {
-                enqueueEmergency(emergency);
-                std::this_thread::sleep_for(std::chrono::milliseconds(1));
-                continue;
-            }
-            if ((decoded->counter & 0x07U) != (expectedCounter & 0x07U)) {
-                ++mailboxDiagnostics_.staleCounterDrops;
-                setTxErrorClass(MailboxErrorClass::StaleCounter);
-                std::this_thread::sleep_for(std::chrono::milliseconds(1));
-                continue;
-            }
-            if (!accept(*decoded)) {
-                ++mailboxDiagnostics_.parseRejects;
-                setTxErrorClass(MailboxErrorClass::ParseReject);
-                std::this_thread::sleep_for(std::chrono::milliseconds(1));
-                continue;
-            }
-            ++mailboxDiagnostics_.matchedResponses;
-            outFrame = *decoded;
-            return true;
-        }
-        outError = "Timed out waiting for CoE mailbox response";
-        ++mailboxDiagnostics_.mailboxTimeouts;
-        if (txErrorClass == MailboxErrorClass::None) {
-            setTxErrorClass(MailboxErrorClass::Timeout);
-        }
-        return false;
+        return ok;
     };
 
     std::uint8_t expectedCounter = 0U;
@@ -1711,7 +1173,10 @@ bool LinuxRawSocketTransport::sdoDownload(std::uint16_t slavePosition, const Sdo
     CoeSdoAckResponse ack;
     bool fatalParseError = false;
     std::string fatalParseReason;
-    if (!mailboxReadMatching(expectedCounter, [&](const EscMailboxFrame& frame) -> bool {
+    MailboxErrorClass readClass = MailboxErrorClass::None;
+    if (!mailboxReadMatchingCoe(adp, slavePosition, readOffset, readSize, statusMode, forceTimeoutTest,
+                                mailboxRetries, mailboxBackoffBaseMs, mailboxBackoffMaxMs, expectedCounter,
+                                [&](const EscMailboxFrame& frame) -> bool {
             auto parsed = CoeMailboxProtocol::parseSdoInitiateDownloadResponse(frame.payload, address);
             if (parsed.success || parsed.error == "SDO abort") {
                 ack = std::move(parsed);
@@ -1723,7 +1188,8 @@ bool LinuxRawSocketTransport::sdoDownload(std::uint16_t slavePosition, const Sdo
                 return true;
             }
             return false;
-        }, responseFrame)) {
+        }, responseFrame, readClass, outError)) {
+        setTxErrorClass(readClass);
         return fail();
     }
     if (fatalParseError) {
@@ -1756,7 +1222,10 @@ bool LinuxRawSocketTransport::sdoDownload(std::uint16_t slavePosition, const Sdo
         }
         fatalParseError = false;
         fatalParseReason.clear();
-        if (!mailboxReadMatching(expectedCounter, [&](const EscMailboxFrame& frame) -> bool {
+        readClass = MailboxErrorClass::None;
+        if (!mailboxReadMatchingCoe(adp, slavePosition, readOffset, readSize, statusMode, forceTimeoutTest,
+                                    mailboxRetries, mailboxBackoffBaseMs, mailboxBackoffMaxMs, expectedCounter,
+                                    [&](const EscMailboxFrame& frame) -> bool {
                 auto parsed = CoeMailboxProtocol::parseSdoDownloadSegmentResponse(frame.payload, toggle);
                 if (parsed.success || parsed.error == "SDO abort") {
                     ack = std::move(parsed);
@@ -1768,7 +1237,8 @@ bool LinuxRawSocketTransport::sdoDownload(std::uint16_t slavePosition, const Sdo
                     return true;
                 }
                 return false;
-            }, responseFrame)) {
+            }, responseFrame, readClass, outError)) {
+            setTxErrorClass(readClass);
             return fail();
         }
         if (fatalParseError) {
@@ -1892,516 +1362,17 @@ bool LinuxRawSocketTransport::pollEmergency(EmergencyMessage& outEmergency) {
     return true;
 }
 
-bool LinuxRawSocketTransport::discoverTopology(TopologySnapshot& outSnapshot, std::string& outError) {
-    outSnapshot = TopologySnapshot{};
-    outError.clear();
-    if (socketFd_ < 0) {
-        outError = "transport not open";
-        return false;
-    }
+bool LinuxRawSocketTransport::resolveMailboxWindow(std::uint16_t adp,
+                                                   std::uint16_t& writeOffset,
+                                                   std::uint16_t& writeSize,
+                                                   std::uint16_t& readOffset,
+                                                   std::uint16_t& readSize,
+                                                   std::string& outError) {
+    writeOffset = mailboxWriteOffset_;
+    writeSize = mailboxWriteSize_;
+    readOffset = mailboxReadOffset_;
+    readSize = mailboxReadSize_;
 
-    auto autoIncAddress = [](std::uint16_t position) -> std::uint16_t {
-        // APRD/APWR use signed auto-increment addressing: 0, -1, -2, ...
-        return static_cast<std::uint16_t>(0U - position);
-    };
-    auto readAt = [&](std::uint16_t adp, std::uint16_t ado, std::size_t size,
-                      std::vector<std::uint8_t>& out) -> bool {
-        const auto currentIndex = datagramIndex_++;
-        EthercatDatagramRequest request;
-        request.command = kCommandAprd;
-        request.datagramIndex = currentIndex;
-        request.adp = adp;
-        request.ado = ado;
-        request.payload.assign(size, 0U);
-
-        std::uint16_t wkc = 0;
-        std::vector<std::uint8_t> payload;
-        if (!sendAndReceiveDatagram(socketFd_, ifIndex_, timeoutMs_, maxFramesPerCycle_,
-                                    expectedWorkingCounter_, destinationMac_, sourceMac_,
-                                    request, wkc, payload, error_)) {
-            return false;
-        }
-        if (payload.size() < size) {
-            return false;
-        }
-        out = std::move(payload);
-        return true;
-    };
-    auto writeAt = [&](std::uint16_t adp, std::uint16_t ado, const std::vector<std::uint8_t>& value) -> bool {
-        const auto currentIndex = datagramIndex_++;
-        EthercatDatagramRequest request;
-        request.command = kCommandApwr;
-        request.datagramIndex = currentIndex;
-        request.adp = adp;
-        request.ado = ado;
-        request.payload = value;
-
-        std::uint16_t wkc = 0;
-        std::vector<std::uint8_t> payload;
-        return sendAndReceiveDatagram(socketFd_, ifIndex_, timeoutMs_, maxFramesPerCycle_,
-                                      expectedWorkingCounter_, destinationMac_, sourceMac_,
-                                      request, wkc, payload, error_);
-    };
-    auto readSiiWord32 = [&](std::uint16_t adp, std::uint16_t wordAddress, std::uint32_t& outValue) -> bool {
-        const std::vector<std::uint8_t> addrPayload = {
-            static_cast<std::uint8_t>(wordAddress & 0xFFU),
-            static_cast<std::uint8_t>((wordAddress >> 8U) & 0xFFU),
-            0x00U,
-            0x00U,
-        };
-        if (!writeAt(adp, kRegisterEepAddress, addrPayload)) {
-            return false;
-        }
-        const std::vector<std::uint8_t> cmdPayload = {
-            static_cast<std::uint8_t>(kEepCommandRead & 0xFFU),
-            static_cast<std::uint8_t>((kEepCommandRead >> 8U) & 0xFFU),
-        };
-        if (!writeAt(adp, kRegisterEepControlStatus, cmdPayload)) {
-            return false;
-        }
-
-        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
-        while (std::chrono::steady_clock::now() < deadline) {
-            std::vector<std::uint8_t> statusPayload;
-            if (!readAt(adp, kRegisterEepControlStatus, 2, statusPayload)) {
-                return false;
-            }
-            const std::uint16_t status = static_cast<std::uint16_t>(statusPayload[0]) |
-                                         (static_cast<std::uint16_t>(statusPayload[1]) << 8U);
-            if ((status & kEepBusy) != 0U) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(1));
-                continue;
-            }
-            if ((status & kEepErrorMask) != 0U) {
-                return false;
-            }
-
-            std::vector<std::uint8_t> dataPayload;
-            if (!readAt(adp, kRegisterEepData, 4, dataPayload)) {
-                return false;
-            }
-            outValue = static_cast<std::uint32_t>(dataPayload[0]) |
-                       (static_cast<std::uint32_t>(dataPayload[1]) << 8U) |
-                       (static_cast<std::uint32_t>(dataPayload[2]) << 16U) |
-                       (static_cast<std::uint32_t>(dataPayload[3]) << 24U);
-            return true;
-        }
-        return false;
-    };
-
-    for (std::uint16_t position = 0; position < 256; ++position) {
-        const std::uint16_t adp = autoIncAddress(position);
-        TopologySlaveInfo info;
-        info.position = position;
-        info.online = false;
-
-        std::vector<std::uint8_t> alPayload;
-        if (!readAt(adp, kRegisterAlStatus, 2, alPayload)) {
-            if (position == 0) {
-                continue;
-            }
-            // EtherCAT chains are contiguous in auto-increment addressing.
-            break;
-        }
-        info.online = true;
-        const auto alRaw = static_cast<std::uint16_t>(alPayload[0]) |
-                           (static_cast<std::uint16_t>(alPayload[1]) << 8U);
-        SlaveState decodedState = SlaveState::Init;
-        info.alStateValid = decodeAlState(alRaw, decodedState);
-        if (info.alStateValid) {
-            info.alState = decodedState;
-        }
-
-        std::vector<std::uint8_t> escTypePayload;
-        if (readAt(adp, kRegisterEscType, 2, escTypePayload) && escTypePayload.size() >= 2) {
-            info.escType = static_cast<std::uint16_t>(escTypePayload[0]) |
-                           (static_cast<std::uint16_t>(escTypePayload[1]) << 8U);
-        }
-        std::vector<std::uint8_t> escRevisionPayload;
-        if (readAt(adp, kRegisterEscRevision, 2, escRevisionPayload) && escRevisionPayload.size() >= 2) {
-            info.escRevision = static_cast<std::uint16_t>(escRevisionPayload[0]) |
-                               (static_cast<std::uint16_t>(escRevisionPayload[1]) << 8U);
-        }
-
-        // Prefer standardized CoE identity object (0x1018) for real vendor/product identity.
-        std::uint32_t abort = 0U;
-        std::string sdoError;
-        std::vector<std::uint8_t> objectData;
-        SdoAddress vendorAddr;
-        vendorAddr.index = 0x1018U;
-        vendorAddr.subIndex = 0x01U;
-        SdoAddress productAddr;
-        productAddr.index = 0x1018U;
-        productAddr.subIndex = 0x02U;
-        const bool hasVendor = sdoUpload(position, vendorAddr, objectData, abort, sdoError) && objectData.size() >= 4;
-        if (hasVendor) {
-            info.vendorId = static_cast<std::uint32_t>(objectData[0]) |
-                            (static_cast<std::uint32_t>(objectData[1]) << 8U) |
-                            (static_cast<std::uint32_t>(objectData[2]) << 16U) |
-                            (static_cast<std::uint32_t>(objectData[3]) << 24U);
-        }
-        objectData.clear();
-        abort = 0U;
-        sdoError.clear();
-        const bool hasProduct = sdoUpload(position, productAddr, objectData, abort, sdoError) && objectData.size() >= 4;
-        if (hasProduct) {
-            info.productCode = static_cast<std::uint32_t>(objectData[0]) |
-                               (static_cast<std::uint32_t>(objectData[1]) << 8U) |
-                               (static_cast<std::uint32_t>(objectData[2]) << 16U) |
-                               (static_cast<std::uint32_t>(objectData[3]) << 24U);
-        }
-        info.identityFromCoe = hasVendor && hasProduct;
-        if (!info.identityFromCoe) {
-            std::uint32_t siiVendor = 0U;
-            std::uint32_t siiProduct = 0U;
-            const bool siiVendorOk = readSiiWord32(adp, kSiiWordVendorId, siiVendor);
-            const bool siiProductOk = readSiiWord32(adp, kSiiWordProductCode, siiProduct);
-            if (siiVendorOk && siiProductOk) {
-                info.vendorId = siiVendor;
-                info.productCode = siiProduct;
-                info.identityFromSii = true;
-            }
-        }
-
-        outSnapshot.slaves.push_back(info);
-    }
-    outSnapshot.redundancyHealthy = (secondarySocketFd_ >= 0) || !redundancyEnabled_;
-    return true;
-}
-
-bool LinuxRawSocketTransport::isRedundancyLinkHealthy(std::string& outError) {
-    outError.clear();
-    if (!redundancyEnabled_) {
-        return true;
-    }
-    if (secondaryIfname_.empty()) {
-        outError = "redundancy enabled but secondary interface not configured";
-        return false;
-    }
-    return secondarySocketFd_ >= 0;
-}
-
-bool LinuxRawSocketTransport::configureProcessImage(const NetworkConfiguration& config, std::string& outError) {
-    outError.clear();
-    if (socketFd_ < 0) {
-        outError = "transport not open";
-        return false;
-    }
-    const bool traceMap = (std::getenv("OEC_TRACE_MAP") != nullptr);
-    outputWindows_.clear();
-
-    const auto readSm = [&](std::uint16_t position, std::uint8_t smIndex,
-                            std::uint16_t& outStart, std::uint16_t& outLen) -> bool {
-        const auto currentIndex = datagramIndex_++;
-        EthercatDatagramRequest req;
-        req.command = kCommandAprd;
-        req.datagramIndex = currentIndex;
-        req.adp = toAutoIncrementAddress(position);
-        req.ado = static_cast<std::uint16_t>(kRegisterSmBase + (smIndex * 8U));
-        req.payload.assign(8U, 0U);
-
-        std::uint16_t wkc = 0;
-        std::vector<std::uint8_t> payload;
-        if (!sendAndReceiveDatagram(socketFd_, ifIndex_, timeoutMs_, maxFramesPerCycle_,
-                                    expectedWorkingCounter_, destinationMac_, sourceMac_,
-                                    req, wkc, payload, outError)) {
-            return false;
-        }
-        if (payload.size() < 4U) {
-            outError = "SM read payload too short";
-            return false;
-        }
-        outStart = static_cast<std::uint16_t>(payload[0]) |
-                   (static_cast<std::uint16_t>(payload[1]) << 8U);
-        outLen = static_cast<std::uint16_t>(payload[2]) |
-                 (static_cast<std::uint16_t>(payload[3]) << 8U);
-        return true;
-    };
-
-    const auto writeFmmu = [&](std::uint16_t position, std::uint8_t fmmuIndex,
-                               std::uint32_t logicalStart, std::uint16_t length,
-                               std::uint16_t physicalStart, bool writeDirection) -> bool {
-        std::vector<std::uint8_t> payload(16U, 0U);
-        payload[0] = static_cast<std::uint8_t>(logicalStart & 0xFFU);
-        payload[1] = static_cast<std::uint8_t>((logicalStart >> 8U) & 0xFFU);
-        payload[2] = static_cast<std::uint8_t>((logicalStart >> 16U) & 0xFFU);
-        payload[3] = static_cast<std::uint8_t>((logicalStart >> 24U) & 0xFFU);
-        payload[4] = static_cast<std::uint8_t>(length & 0xFFU);
-        payload[5] = static_cast<std::uint8_t>((length >> 8U) & 0xFFU);
-        payload[6] = 0U;   // logical start bit
-        payload[7] = 7U;   // logical end bit
-        payload[8] = static_cast<std::uint8_t>(physicalStart & 0xFFU);
-        payload[9] = static_cast<std::uint8_t>((physicalStart >> 8U) & 0xFFU);
-        payload[10] = 0U;  // physical start bit
-        payload[11] = writeDirection ? 0x02U : 0x01U; // write or read enable
-        payload[12] = 0x01U; // enable
-
-        const auto currentIndex = datagramIndex_++;
-        EthercatDatagramRequest req;
-        req.command = kCommandApwr;
-        req.datagramIndex = currentIndex;
-        req.adp = toAutoIncrementAddress(position);
-        req.ado = static_cast<std::uint16_t>(kRegisterFmmuBase + (fmmuIndex * 16U));
-        req.payload = std::move(payload);
-
-        std::uint16_t wkc = 0;
-        std::vector<std::uint8_t> ack;
-        return sendAndReceiveDatagram(socketFd_, ifIndex_, timeoutMs_, maxFramesPerCycle_,
-                                      expectedWorkingCounter_, destinationMac_, sourceMac_,
-                                      req, wkc, ack, outError);
-    };
-    const auto writeSm = [&](std::uint16_t position, std::uint8_t smIndex,
-                             std::uint16_t start, std::uint16_t len,
-                             std::uint8_t control, std::uint8_t activate) -> bool {
-        std::vector<std::uint8_t> payload(8U, 0U);
-        payload[0] = static_cast<std::uint8_t>(start & 0xFFU);
-        payload[1] = static_cast<std::uint8_t>((start >> 8U) & 0xFFU);
-        payload[2] = static_cast<std::uint8_t>(len & 0xFFU);
-        payload[3] = static_cast<std::uint8_t>((len >> 8U) & 0xFFU);
-        payload[4] = control;
-        payload[6] = activate;
-
-        const auto currentIndex = datagramIndex_++;
-        EthercatDatagramRequest req;
-        req.command = kCommandApwr;
-        req.datagramIndex = currentIndex;
-        req.adp = toAutoIncrementAddress(position);
-        req.ado = static_cast<std::uint16_t>(kRegisterSmBase + (smIndex * 8U));
-        req.payload = std::move(payload);
-
-        std::uint16_t wkc = 0;
-        std::vector<std::uint8_t> ack;
-        return sendAndReceiveDatagram(socketFd_, ifIndex_, timeoutMs_, maxFramesPerCycle_,
-                                      expectedWorkingCounter_, destinationMac_, sourceMac_,
-                                      req, wkc, ack, outError);
-    };
-
-    std::unordered_map<std::string, std::uint16_t> slaveByName;
-    slaveByName.reserve(config.slaves.size());
-    for (const auto& s : config.slaves) {
-        slaveByName[s.name] = s.position;
-    }
-    std::unordered_map<std::uint16_t, std::vector<SignalBinding>> outputSignalsBySlave;
-    std::unordered_map<std::uint16_t, std::vector<SignalBinding>> inputSignalsBySlave;
-
-    std::unordered_set<std::uint16_t> outputSlaves;
-    std::unordered_set<std::uint16_t> inputSlaves;
-    for (const auto& signal : config.signals) {
-        const auto it = slaveByName.find(signal.slaveName);
-        if (it == slaveByName.end()) {
-            continue;
-        }
-        if (signal.direction == SignalDirection::Output) {
-            outputSlaves.insert(it->second);
-            outputSignalsBySlave[it->second].push_back(signal);
-        } else {
-            inputSlaves.insert(it->second);
-            inputSignalsBySlave[it->second].push_back(signal);
-        }
-    }
-
-    auto buildDefaultEntries = [](const std::vector<SignalBinding>& signals,
-                                  bool outputDirection) -> std::vector<PdoMappingEntry> {
-        // For simple EL1xxx/EL2xxx terminals, channel bits are typically mapped at
-        // 0x6000:1..N (inputs) and 0x7000:1..N (outputs).
-        std::map<std::uint8_t, PdoMappingEntry> ordered;
-        for (const auto& sig : signals) {
-            PdoMappingEntry e;
-            e.index = outputDirection ? 0x7000U : 0x6000U;
-            e.subIndex = static_cast<std::uint8_t>(sig.bitOffset + 1U);
-            e.bitLength = 1U;
-            ordered[e.subIndex] = e;
-        }
-        std::vector<PdoMappingEntry> out;
-        out.reserve(ordered.size());
-        for (const auto& kv : ordered) {
-            out.push_back(kv.second);
-        }
-        return out;
-    };
-    auto estimatedByteLength = [](const std::vector<SignalBinding>& signals) -> std::uint16_t {
-        std::size_t maxByte = 0U;
-        bool any = false;
-        for (const auto& sig : signals) {
-            any = true;
-            maxByte = std::max(maxByte, sig.byteOffset);
-        }
-        return static_cast<std::uint16_t>(any ? (maxByte + 1U) : 0U);
-    };
-
-    std::uint32_t outputLogical = logicalAddress_;
-    std::uint32_t inputLogical = logicalAddress_ + static_cast<std::uint32_t>(config.processImageOutputBytes);
-    std::uint8_t fmmuIndex = 0U;
-    std::size_t mappedOutputSlaves = 0U;
-    std::size_t mappedInputSlaves = 0U;
-
-    for (const auto position : outputSlaves) {
-        std::uint16_t smStart = 0U;
-        std::uint16_t smLen = 0U;
-        if (!readSm(position, 2U, smStart, smLen)) {
-            return false;
-        }
-        if (traceMap) {
-            std::cerr << "[oec-map] slave=" << position
-                      << " SM2(start=0x" << std::hex << smStart
-                      << ", len=" << std::dec << smLen << ")\n";
-        }
-        if (smLen == 0U) {
-            const auto sigIt = outputSignalsBySlave.find(position);
-            if (sigIt != outputSignalsBySlave.end() && !sigIt->second.empty()) {
-                std::string pdoError;
-                const auto entries = buildDefaultEntries(sigIt->second, true);
-                if (configurePdo(position, 0x1600U, entries, pdoError)) {
-                    if (!readSm(position, 2U, smStart, smLen)) {
-                        return false;
-                    }
-                    if (traceMap) {
-                        std::cerr << "[oec-map] slave=" << position
-                                  << " SM2 re-read after default RxPDO config (start=0x" << std::hex << smStart
-                                  << ", len=" << std::dec << smLen << ")\n";
-                    }
-                } else if (traceMap) {
-                    std::cerr << "[oec-map] slave=" << position
-                              << " default RxPDO config failed: " << pdoError << '\n';
-                }
-                if (smLen == 0U) {
-                    // Mailbox-less fallback (SOEM-style simple IO): write minimal SM2 defaults.
-                    const auto estLen = std::max<std::uint16_t>(1U, estimatedByteLength(sigIt->second));
-                    if (writeSm(position, 2U, 0x1100U, estLen, 0x24U, 0x01U)) {
-                        if (!readSm(position, 2U, smStart, smLen)) {
-                            return false;
-                        }
-                        if (traceMap) {
-                            std::cerr << "[oec-map] slave=" << position
-                                      << " SM2 re-read after direct SM fallback (start=0x" << std::hex << smStart
-                                      << ", len=" << std::dec << smLen << ")\n";
-                        }
-                    } else if (traceMap) {
-                        std::cerr << "[oec-map] slave=" << position
-                                  << " direct SM2 fallback failed: " << outError << '\n';
-                    }
-                }
-            }
-        }
-        if (smLen == 0U) {
-            continue;
-        }
-        if (!writeFmmu(position, fmmuIndex++, outputLogical, smLen, smStart, true)) {
-            return false;
-        }
-        if (traceMap) {
-            std::cerr << "[oec-map] slave=" << position
-                      << " FMMU(write, logical=0x" << std::hex << outputLogical
-                      << ", len=" << std::dec << smLen
-                      << ", physical=0x" << std::hex << smStart << ")\n";
-        }
-        outputWindows_.push_back(ProcessDataWindow{
-            position, smStart, smLen, outputLogical
-        });
-        outputLogical += smLen;
-        ++mappedOutputSlaves;
-    }
-
-    for (const auto position : inputSlaves) {
-        std::uint16_t smStart = 0U;
-        std::uint16_t smLen = 0U;
-        if (!readSm(position, 3U, smStart, smLen)) {
-            return false;
-        }
-        if (traceMap) {
-            std::cerr << "[oec-map] slave=" << position
-                      << " SM3(start=0x" << std::hex << smStart
-                      << ", len=" << std::dec << smLen << ")\n";
-        }
-        if (smLen == 0U) {
-            const auto sigIt = inputSignalsBySlave.find(position);
-            if (sigIt != inputSignalsBySlave.end() && !sigIt->second.empty()) {
-                std::string pdoError;
-                const auto entries = buildDefaultEntries(sigIt->second, false);
-                if (configurePdo(position, 0x1A00U, entries, pdoError)) {
-                    if (!readSm(position, 3U, smStart, smLen)) {
-                        return false;
-                    }
-                    if (traceMap) {
-                        std::cerr << "[oec-map] slave=" << position
-                                  << " SM3 re-read after default TxPDO config (start=0x" << std::hex << smStart
-                                  << ", len=" << std::dec << smLen << ")\n";
-                    }
-                } else if (traceMap) {
-                    std::cerr << "[oec-map] slave=" << position
-                              << " default TxPDO config failed: " << pdoError << '\n';
-                }
-                if (smLen == 0U) {
-                    // Mailbox-less fallback (SOEM-style simple IO): write minimal SM3 defaults.
-                    const auto estLen = std::max<std::uint16_t>(1U, estimatedByteLength(sigIt->second));
-                    if (writeSm(position, 3U, 0x1100U, estLen, 0x20U, 0x01U)) {
-                        if (!readSm(position, 3U, smStart, smLen)) {
-                            return false;
-                        }
-                        if (traceMap) {
-                            std::cerr << "[oec-map] slave=" << position
-                                      << " SM3 re-read after direct SM fallback (start=0x" << std::hex << smStart
-                                      << ", len=" << std::dec << smLen << ")\n";
-                        }
-                    } else if (traceMap) {
-                        std::cerr << "[oec-map] slave=" << position
-                                  << " direct SM3 fallback failed: " << outError << '\n';
-                    }
-                }
-            }
-        }
-        if (smLen == 0U) {
-            continue;
-        }
-        if (!writeFmmu(position, fmmuIndex++, inputLogical, smLen, smStart, false)) {
-            return false;
-        }
-        if (traceMap) {
-            std::cerr << "[oec-map] slave=" << position
-                      << " FMMU(read, logical=0x" << std::hex << inputLogical
-                      << ", len=" << std::dec << smLen
-                      << ", physical=0x" << std::hex << smStart << ")\n";
-        }
-        inputLogical += smLen;
-        ++mappedInputSlaves;
-    }
-
-    if (!outputSlaves.empty() && mappedOutputSlaves == 0U) {
-        outError = "No output slaves produced valid SM2 mapping (all SM2 lengths were zero)";
-        return false;
-    }
-    if (!inputSlaves.empty() && mappedInputSlaves == 0U) {
-        outError = "No input slaves produced valid SM3 mapping (all SM3 lengths were zero)";
-        return false;
-    }
-    if (traceMap) {
-        std::cerr << "[oec-map] mapped outputs=" << mappedOutputSlaves
-                  << " mapped inputs=" << mappedInputSlaves << '\n';
-    }
-    return true;
-}
-
-bool LinuxRawSocketTransport::foeRead(std::uint16_t slavePosition, const FoERequest& request,
-                                      FoEResponse& outResponse, std::string& outError) {
-    outResponse = FoEResponse{};
-    outError.clear();
-    ++mailboxDiagnostics_.foeReadStarted;
-    auto fail = [&](std::string message) -> bool {
-        outError = std::move(message);
-        outResponse.success = false;
-        outResponse.error = outError;
-        ++mailboxDiagnostics_.foeReadFailed;
-        return false;
-    };
-    if (socketFd_ < 0) {
-        return fail("transport not open");
-    }
-
-    const auto adp = toAutoIncrementAddress(slavePosition);
-    std::uint16_t writeOffset = mailboxWriteOffset_;
-    std::uint16_t writeSize = mailboxWriteSize_;
-    std::uint16_t readOffset = mailboxReadOffset_;
-    std::uint16_t readSize = mailboxReadSize_;
     std::uint16_t sm0Start = 0U;
     std::uint16_t sm0Len = 0U;
     std::uint16_t sm1Start = 0U;
@@ -2418,407 +1389,51 @@ bool LinuxRawSocketTransport::foeRead(std::uint16_t slavePosition, const FoERequ
         readOffset = sm1Start;
         readSize = sm1Len;
     }
-
-    auto mailboxWrite = [&](std::uint8_t type, const std::vector<std::uint8_t>& payload,
-                            std::uint8_t& outCounter) -> bool {
-        EscMailboxFrame frame;
-        frame.channel = 0U;
-        frame.priority = 0U;
-        frame.type = type;
-        frame.counter = static_cast<std::uint8_t>(mailboxCounter_++ & 0x07U);
-        outCounter = frame.counter;
-        frame.payload = payload;
-        auto bytes = CoeMailboxProtocol::encodeEscMailbox(frame);
-        if (bytes.size() > writeSize) {
-            outError = "FoE request exceeds mailbox write window";
-            return false;
-        }
-        bytes.resize(writeSize, 0U);
-        std::uint16_t wkc = 0;
-        if (!mailboxApwr(socketFd_, ifIndex_, timeoutMs_, maxFramesPerCycle_,
-                         expectedWorkingCounter_, destinationMac_, sourceMac_,
-                         datagramIndex_, adp, writeOffset, bytes, outError, &wkc)) {
-            return false;
-        }
-        lastWorkingCounter_ = wkc;
-        ++mailboxDiagnostics_.mailboxWrites;
-        return true;
-    };
-
-    auto mailboxReadExpected = [&](std::uint8_t expectedCounter,
-                                   std::uint8_t expectedType,
-                                   EscMailboxFrame& outFrame) -> bool {
-        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs_);
-        while (std::chrono::steady_clock::now() < deadline) {
-            std::vector<std::uint8_t> payload;
-            std::uint16_t wkc = 0;
-            if (!mailboxAprd(socketFd_, ifIndex_, timeoutMs_, maxFramesPerCycle_,
-                             expectedWorkingCounter_, destinationMac_, sourceMac_,
-                             datagramIndex_, adp, readOffset, readSize, payload, outError, &wkc)) {
-                return false;
-            }
-            lastWorkingCounter_ = wkc;
-            ++mailboxDiagnostics_.mailboxReads;
-            auto decoded = CoeMailboxProtocol::decodeEscMailbox(payload);
-            if (!decoded) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(1));
-                continue;
-            }
-            // Drain CoE emergency frames if they appear interleaved.
-            if (decoded->type == CoeMailboxProtocol::kMailboxTypeCoe) {
-                EmergencyMessage emergency {};
-                if (CoeMailboxProtocol::parseEmergency(decoded->payload, slavePosition, emergency)) {
-                    if (emergencies_.size() >= emergencyQueueLimit_) {
-                        emergencies_.pop();
-                        ++mailboxDiagnostics_.emergencyDropped;
-                    }
-                    emergencies_.push(emergency);
-                    ++mailboxDiagnostics_.emergencyQueued;
-                }
-                std::this_thread::sleep_for(std::chrono::milliseconds(1));
-                continue;
-            }
-            if (decoded->type != expectedType) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(1));
-                continue;
-            }
-            if ((decoded->counter & 0x07U) != (expectedCounter & 0x07U)) {
-                ++mailboxDiagnostics_.staleCounterDrops;
-                std::this_thread::sleep_for(std::chrono::milliseconds(1));
-                continue;
-            }
-            outFrame = *decoded;
-            ++mailboxDiagnostics_.matchedResponses;
-            return true;
-        }
-        outError = "Timed out waiting for FoE mailbox response";
-        ++mailboxDiagnostics_.mailboxTimeouts;
-        return false;
-    };
-
-    std::vector<std::uint8_t> rrq;
-    rrq.reserve(8U + request.fileName.size() + 1U);
-    appendLe16Raw(rrq, kFoeOpReadReq);
-    appendLe32Raw(rrq, request.password);
-    rrq.insert(rrq.end(), request.fileName.begin(), request.fileName.end());
-    rrq.push_back('\0');
-
-    std::uint8_t expectedCounter = 0U;
-    if (!mailboxWrite(kMailboxTypeFoe, rrq, expectedCounter)) {
-        return fail(outError);
-    }
-
-    const std::size_t maxDataPerPacket =
-        (readSize > 12U) ? (readSize - 12U) : std::max<std::size_t>(16U, request.maxChunkBytes);
-    std::uint32_t expectedPacket = 1U;
-    while (true) {
-        EscMailboxFrame frame;
-        if (!mailboxReadExpected(expectedCounter, kMailboxTypeFoe, frame)) {
-            return fail(outError);
-        }
-        if (frame.payload.size() < 2U) {
-            return fail("FoE response payload too short");
-        }
-        const auto op = readLe16Raw(frame.payload, 0U);
-        if (op == kFoeOpErr) {
-            const auto errCode = (frame.payload.size() >= 6U) ? readLe32Raw(frame.payload, 2U) : 0U;
-            return fail("FoE error response code=0x" + std::to_string(errCode));
-        }
-        if (op == kFoeOpBusy) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-            continue;
-        }
-        if (op != kFoeOpData || frame.payload.size() < 6U) {
-            return fail("Unexpected FoE response opcode");
-        }
-
-        const auto packetNo = readLe32Raw(frame.payload, 2U);
-        if (packetNo != expectedPacket) {
-            return fail("FoE packet sequence mismatch");
-        }
-        const std::vector<std::uint8_t> chunk(frame.payload.begin() + 6, frame.payload.end());
-        outResponse.data.insert(outResponse.data.end(), chunk.begin(), chunk.end());
-
-        std::vector<std::uint8_t> ack;
-        ack.reserve(6U);
-        appendLe16Raw(ack, kFoeOpAck);
-        appendLe32Raw(ack, packetNo);
-        if (!mailboxWrite(kMailboxTypeFoe, ack, expectedCounter)) {
-            return fail(outError);
-        }
-        ++expectedPacket;
-
-        if (chunk.size() < maxDataPerPacket) {
-            outResponse.success = true;
-            outResponse.error.clear();
-            return true;
-        }
-    }
+    return true;
 }
 
-bool LinuxRawSocketTransport::foeWrite(std::uint16_t slavePosition, const FoERequest& request,
-                                       const std::vector<std::uint8_t>& data, std::string& outError) {
-    outError.clear();
-    ++mailboxDiagnostics_.foeWriteStarted;
-    auto fail = [&](std::string message) -> bool {
-        outError = std::move(message);
-        ++mailboxDiagnostics_.foeWriteFailed;
-        return false;
-    };
-    if (socketFd_ < 0) {
-        return fail("transport not open");
-    }
-
-    const auto adp = toAutoIncrementAddress(slavePosition);
-    std::uint16_t writeOffset = mailboxWriteOffset_;
-    std::uint16_t writeSize = mailboxWriteSize_;
-    std::uint16_t readOffset = mailboxReadOffset_;
-    std::uint16_t readSize = mailboxReadSize_;
-    std::uint16_t sm0Start = 0U;
-    std::uint16_t sm0Len = 0U;
-    std::uint16_t sm1Start = 0U;
-    std::uint16_t sm1Len = 0U;
-    if (readMailboxSmWindow(socketFd_, ifIndex_, timeoutMs_, maxFramesPerCycle_,
-                            expectedWorkingCounter_, destinationMac_, sourceMac_,
-                            datagramIndex_, adp, 0U, sm0Start, sm0Len, outError) &&
-        readMailboxSmWindow(socketFd_, ifIndex_, timeoutMs_, maxFramesPerCycle_,
-                            expectedWorkingCounter_, destinationMac_, sourceMac_,
-                            datagramIndex_, adp, 1U, sm1Start, sm1Len, outError) &&
-        sm0Len > 0U && sm1Len > 0U) {
-        writeOffset = sm0Start;
-        writeSize = sm0Len;
-        readOffset = sm1Start;
-        readSize = sm1Len;
-    }
-
-    auto mailboxWrite = [&](std::uint8_t type, const std::vector<std::uint8_t>& payload,
-                            std::uint8_t& outCounter) -> bool {
-        EscMailboxFrame frame;
-        frame.channel = 0U;
-        frame.priority = 0U;
-        frame.type = type;
-        frame.counter = static_cast<std::uint8_t>(mailboxCounter_++ & 0x07U);
-        outCounter = frame.counter;
-        frame.payload = payload;
-        auto bytes = CoeMailboxProtocol::encodeEscMailbox(frame);
-        if (bytes.size() > writeSize) {
-            outError = "FoE request exceeds mailbox write window";
-            return false;
-        }
-        bytes.resize(writeSize, 0U);
-        std::uint16_t wkc = 0;
-        if (!mailboxApwr(socketFd_, ifIndex_, timeoutMs_, maxFramesPerCycle_,
-                         expectedWorkingCounter_, destinationMac_, sourceMac_,
-                         datagramIndex_, adp, writeOffset, bytes, outError, &wkc)) {
-            return false;
-        }
-        lastWorkingCounter_ = wkc;
-        ++mailboxDiagnostics_.mailboxWrites;
-        return true;
-    };
-
-    auto mailboxReadExpected = [&](std::uint8_t expectedCounter,
-                                   std::uint8_t expectedType,
-                                   EscMailboxFrame& outFrame) -> bool {
-        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs_);
-        while (std::chrono::steady_clock::now() < deadline) {
-            std::vector<std::uint8_t> payload;
-            std::uint16_t wkc = 0;
-            if (!mailboxAprd(socketFd_, ifIndex_, timeoutMs_, maxFramesPerCycle_,
-                             expectedWorkingCounter_, destinationMac_, sourceMac_,
-                             datagramIndex_, adp, readOffset, readSize, payload, outError, &wkc)) {
-                return false;
-            }
-            lastWorkingCounter_ = wkc;
-            ++mailboxDiagnostics_.mailboxReads;
-            auto decoded = CoeMailboxProtocol::decodeEscMailbox(payload);
-            if (!decoded) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(1));
-                continue;
-            }
-            if (decoded->type != expectedType) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(1));
-                continue;
-            }
-            if ((decoded->counter & 0x07U) != (expectedCounter & 0x07U)) {
-                ++mailboxDiagnostics_.staleCounterDrops;
-                std::this_thread::sleep_for(std::chrono::milliseconds(1));
-                continue;
-            }
-            outFrame = *decoded;
-            ++mailboxDiagnostics_.matchedResponses;
-            return true;
-        }
-        outError = "Timed out waiting for FoE mailbox response";
-        ++mailboxDiagnostics_.mailboxTimeouts;
-        return false;
-    };
-
-    std::vector<std::uint8_t> wrq;
-    wrq.reserve(8U + request.fileName.size() + 1U);
-    appendLe16Raw(wrq, kFoeOpWriteReq);
-    appendLe32Raw(wrq, request.password);
-    wrq.insert(wrq.end(), request.fileName.begin(), request.fileName.end());
-    wrq.push_back('\0');
-
-    std::uint8_t expectedCounter = 0U;
-    if (!mailboxWrite(kMailboxTypeFoe, wrq, expectedCounter)) {
-        return fail(outError);
-    }
-
+bool LinuxRawSocketTransport::mailboxWriteFrame(std::uint16_t adp,
+                                                std::uint16_t writeOffset,
+                                                std::uint16_t writeSize,
+                                                std::uint8_t type,
+                                                const std::vector<std::uint8_t>& payload,
+                                                std::uint8_t& outCounter,
+                                                std::string& outError) {
     EscMailboxFrame frame;
-    if (!mailboxReadExpected(expectedCounter, kMailboxTypeFoe, frame)) {
-        return fail(outError);
-    }
-    if (frame.payload.size() < 2U) {
-        return fail("FoE response payload too short");
-    }
-    auto op = readLe16Raw(frame.payload, 0U);
-    if (op == kFoeOpErr) {
-        return fail("FoE write request rejected");
-    }
-    if (op != kFoeOpAck) {
-        return fail("Expected FoE ACK after WRQ");
-    }
-
-    const std::size_t maxDataBytes = (writeSize > 12U)
-        ? std::min<std::size_t>(request.maxChunkBytes, writeSize - 12U)
-        : std::min<std::size_t>(request.maxChunkBytes, 256U);
-    std::size_t cursor = 0U;
-    std::uint32_t packetNo = 1U;
-    while (cursor < data.size() || (data.empty() && packetNo == 1U)) {
-        const auto remaining = (cursor < data.size()) ? (data.size() - cursor) : 0U;
-        const auto chunkBytes = std::min<std::size_t>(maxDataBytes, remaining);
-        std::vector<std::uint8_t> payload;
-        payload.reserve(6U + chunkBytes);
-        appendLe16Raw(payload, kFoeOpData);
-        appendLe32Raw(payload, packetNo);
-        if (chunkBytes > 0U) {
-            payload.insert(payload.end(), data.begin() + static_cast<std::ptrdiff_t>(cursor),
-                           data.begin() + static_cast<std::ptrdiff_t>(cursor + chunkBytes));
-        }
-
-        if (!mailboxWrite(kMailboxTypeFoe, payload, expectedCounter)) {
-            return fail(outError);
-        }
-
-        frame = EscMailboxFrame{};
-        if (!mailboxReadExpected(expectedCounter, kMailboxTypeFoe, frame)) {
-            return fail(outError);
-        }
-        if (frame.payload.size() < 2U) {
-            return fail("FoE ACK payload too short");
-        }
-        op = readLe16Raw(frame.payload, 0U);
-        if (op == kFoeOpErr) {
-            return fail("FoE data packet rejected");
-        }
-        if (op != kFoeOpAck || frame.payload.size() < 6U) {
-            return fail("Expected FoE ACK for data packet");
-        }
-        const auto ackPacket = readLe32Raw(frame.payload, 2U);
-        if (ackPacket != packetNo) {
-            return fail("FoE ACK packet mismatch");
-        }
-
-        cursor += chunkBytes;
-        ++packetNo;
-        if (chunkBytes < maxDataBytes) {
-            break;
-        }
-    }
-    return true;
-}
-
-bool LinuxRawSocketTransport::eoeSend(std::uint16_t slavePosition, const std::vector<std::uint8_t>& frame,
-                                      std::string& outError) {
-    outError.clear();
-    ++mailboxDiagnostics_.eoeSendStarted;
-    auto fail = [&](std::string message) -> bool {
-        outError = std::move(message);
-        ++mailboxDiagnostics_.eoeSendFailed;
-        return false;
-    };
-    if (socketFd_ < 0) {
-        return fail("transport not open");
-    }
-    const auto adp = toAutoIncrementAddress(slavePosition);
-    std::uint16_t writeOffset = mailboxWriteOffset_;
-    std::uint16_t writeSize = mailboxWriteSize_;
-    std::uint16_t readOffset = mailboxReadOffset_;
-    std::uint16_t readSize = mailboxReadSize_;
-    std::uint16_t sm0Start = 0U;
-    std::uint16_t sm0Len = 0U;
-    std::uint16_t sm1Start = 0U;
-    std::uint16_t sm1Len = 0U;
-    if (readMailboxSmWindow(socketFd_, ifIndex_, timeoutMs_, maxFramesPerCycle_,
-                            expectedWorkingCounter_, destinationMac_, sourceMac_,
-                            datagramIndex_, adp, 0U, sm0Start, sm0Len, outError) &&
-        readMailboxSmWindow(socketFd_, ifIndex_, timeoutMs_, maxFramesPerCycle_,
-                            expectedWorkingCounter_, destinationMac_, sourceMac_,
-                            datagramIndex_, adp, 1U, sm1Start, sm1Len, outError) &&
-        sm0Len > 0U && sm1Len > 0U) {
-        writeOffset = sm0Start;
-        writeSize = sm0Len;
-        readOffset = sm1Start;
-        readSize = sm1Len;
-    }
-    (void)readOffset;
-    (void)readSize;
-
-    EscMailboxFrame eoe;
-    eoe.channel = 0U;
-    eoe.priority = 0U;
-    eoe.type = kMailboxTypeEoe;
-    eoe.counter = static_cast<std::uint8_t>(mailboxCounter_++ & 0x07U);
-    eoe.payload = frame;
-    auto bytes = CoeMailboxProtocol::encodeEscMailbox(eoe);
+    frame.channel = 0U;
+    frame.priority = 0U;
+    frame.type = type;
+    frame.counter = static_cast<std::uint8_t>(mailboxCounter_++ & 0x07U);
+    outCounter = frame.counter;
+    frame.payload = payload;
+    auto bytes = CoeMailboxProtocol::encodeEscMailbox(frame);
     if (bytes.size() > writeSize) {
-        return fail("EoE frame exceeds mailbox write window");
+        outError = "Mailbox payload exceeds write window";
+        return false;
     }
     bytes.resize(writeSize, 0U);
     std::uint16_t wkc = 0;
     if (!mailboxApwr(socketFd_, ifIndex_, timeoutMs_, maxFramesPerCycle_,
                      expectedWorkingCounter_, destinationMac_, sourceMac_,
                      datagramIndex_, adp, writeOffset, bytes, outError, &wkc)) {
-        return fail(outError);
+        return false;
     }
     lastWorkingCounter_ = wkc;
     ++mailboxDiagnostics_.mailboxWrites;
     return true;
 }
 
-bool LinuxRawSocketTransport::eoeReceive(std::uint16_t slavePosition, std::vector<std::uint8_t>& frame,
-                                         std::string& outError) {
-    frame.clear();
-    outError.clear();
-    ++mailboxDiagnostics_.eoeReceiveStarted;
-    auto fail = [&](std::string message) -> bool {
-        outError = std::move(message);
-        ++mailboxDiagnostics_.eoeReceiveFailed;
-        return false;
-    };
-    if (socketFd_ < 0) {
-        return fail("transport not open");
-    }
-    const auto adp = toAutoIncrementAddress(slavePosition);
-    std::uint16_t readOffset = mailboxReadOffset_;
-    std::uint16_t readSize = mailboxReadSize_;
-    std::uint16_t sm1Start = 0U;
-    std::uint16_t sm1Len = 0U;
-    std::uint16_t dummyStart = 0U;
-    std::uint16_t dummyLen = 0U;
-    if (readMailboxSmWindow(socketFd_, ifIndex_, timeoutMs_, maxFramesPerCycle_,
-                            expectedWorkingCounter_, destinationMac_, sourceMac_,
-                            datagramIndex_, adp, 0U, dummyStart, dummyLen, outError) &&
-        readMailboxSmWindow(socketFd_, ifIndex_, timeoutMs_, maxFramesPerCycle_,
-                            expectedWorkingCounter_, destinationMac_, sourceMac_,
-                            datagramIndex_, adp, 1U, sm1Start, sm1Len, outError) &&
-        sm1Len > 0U) {
-        readOffset = sm1Start;
-        readSize = sm1Len;
-    }
-
+bool LinuxRawSocketTransport::mailboxReadFrameExpected(std::uint16_t adp,
+                                                       std::uint16_t slavePosition,
+                                                       std::uint16_t readOffset,
+                                                       std::uint16_t readSize,
+                                                       std::uint8_t expectedCounter,
+                                                       std::uint8_t expectedType,
+                                                       bool enforceCounterMatch,
+                                                       EscMailboxFrame& outFrame,
+                                                       bool drainCoeEmergency,
+                                                       const char* timeoutError,
+                                                       std::string& outError) {
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs_);
     while (std::chrono::steady_clock::now() < deadline) {
         std::vector<std::uint8_t> payload;
@@ -2826,7 +1441,7 @@ bool LinuxRawSocketTransport::eoeReceive(std::uint16_t slavePosition, std::vecto
         if (!mailboxAprd(socketFd_, ifIndex_, timeoutMs_, maxFramesPerCycle_,
                          expectedWorkingCounter_, destinationMac_, sourceMac_,
                          datagramIndex_, adp, readOffset, readSize, payload, outError, &wkc)) {
-            return fail(outError);
+            return false;
         }
         lastWorkingCounter_ = wkc;
         ++mailboxDiagnostics_.mailboxReads;
@@ -2835,16 +1450,108 @@ bool LinuxRawSocketTransport::eoeReceive(std::uint16_t slavePosition, std::vecto
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
             continue;
         }
-        if (decoded->type != kMailboxTypeEoe) {
+        if (drainCoeEmergency && decoded->type == CoeMailboxProtocol::kMailboxTypeCoe) {
+            EmergencyMessage emergency {};
+            if (CoeMailboxProtocol::parseEmergency(decoded->payload, slavePosition, emergency)) {
+                if (emergencies_.size() >= emergencyQueueLimit_) {
+                    emergencies_.pop();
+                    ++mailboxDiagnostics_.emergencyDropped;
+                }
+                emergencies_.push(emergency);
+                ++mailboxDiagnostics_.emergencyQueued;
+            }
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
             continue;
         }
-        frame = decoded->payload;
+        if (decoded->type != expectedType) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            continue;
+        }
+        if (enforceCounterMatch && ((decoded->counter & 0x07U) != (expectedCounter & 0x07U))) {
+            ++mailboxDiagnostics_.staleCounterDrops;
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            continue;
+        }
+        outFrame = *decoded;
         ++mailboxDiagnostics_.matchedResponses;
         return true;
     }
     ++mailboxDiagnostics_.mailboxTimeouts;
-    return fail("Timed out waiting for EoE mailbox frame");
+    outError = (timeoutError != nullptr) ? timeoutError : "Timed out waiting for mailbox response";
+    return false;
+}
+
+bool LinuxRawSocketTransport::mailboxDatagramWithRetry(const EthercatDatagramRequest& request,
+                                                       std::uint16_t& outWkc,
+                                                       std::vector<std::uint8_t>& outPayload,
+                                                       bool forceTimeoutTest,
+                                                       int mailboxRetries,
+                                                       int mailboxBackoffBaseMs,
+                                                       int mailboxBackoffMaxMs,
+                                                       MailboxErrorClass& outErrorClass,
+                                                       std::string& outError) {
+    outErrorClass = MailboxErrorClass::None;
+    std::string firstError;
+    if (forceTimeoutTest) {
+        for (int attempt = 0; attempt <= mailboxRetries; ++attempt) {
+            const std::string localError = "Timed out waiting for CoE mailbox response";
+            if (firstError.empty()) {
+                firstError = localError;
+            }
+            if (attempt == mailboxRetries) {
+                outError = localError;
+                ++mailboxDiagnostics_.mailboxTimeouts;
+                outErrorClass = MailboxErrorClass::Timeout;
+                return false;
+            }
+            ++mailboxDiagnostics_.datagramRetries;
+            sleepMailboxBackoff(attempt, mailboxBackoffBaseMs, mailboxBackoffMaxMs);
+        }
+    }
+    for (int attempt = 0; attempt <= mailboxRetries; ++attempt) {
+        std::string localError;
+        if (sendAndReceiveDatagram(socketFd_, ifIndex_, timeoutMs_, maxFramesPerCycle_,
+                                   expectedWorkingCounter_, destinationMac_, sourceMac_,
+                                   request, outWkc, outPayload, localError)) {
+            return true;
+        }
+        if (firstError.empty()) {
+            firstError = localError;
+        }
+        if (!isTransientMailboxTransportError(localError) || attempt == mailboxRetries) {
+            outError = localError;
+            if (isTransientMailboxTransportError(localError)) {
+                ++mailboxDiagnostics_.mailboxTimeouts;
+            }
+            outErrorClass = classifyMailboxError(localError);
+            if (outErrorClass == MailboxErrorClass::None && isTransientMailboxTransportError(localError)) {
+                outErrorClass = MailboxErrorClass::Timeout;
+            }
+            return false;
+        }
+        ++mailboxDiagnostics_.datagramRetries;
+        sleepMailboxBackoff(attempt, mailboxBackoffBaseMs, mailboxBackoffMaxMs);
+    }
+    outError = firstError.empty() ? "Mailbox datagram failed" : firstError;
+    if (isTransientMailboxTransportError(outError)) {
+        ++mailboxDiagnostics_.mailboxTimeouts;
+        outErrorClass = MailboxErrorClass::Timeout;
+    } else {
+        outErrorClass = classifyMailboxError(outError);
+        if (outErrorClass == MailboxErrorClass::None) {
+            outErrorClass = MailboxErrorClass::Unknown;
+        }
+    }
+    return false;
+}
+
+bool LinuxRawSocketTransport::sendDatagramRequest(const EthercatDatagramRequest& request,
+                                                  std::uint16_t& outWkc,
+                                                  std::vector<std::uint8_t>& outPayload,
+                                                  std::string& outError) {
+    return sendAndReceiveDatagram(socketFd_, ifIndex_, timeoutMs_, maxFramesPerCycle_,
+                                  expectedWorkingCounter_, destinationMac_, sourceMac_,
+                                  request, outWkc, outPayload, outError);
 }
 
 std::string LinuxRawSocketTransport::lastError() const { return error_; }

@@ -55,6 +55,16 @@ flowchart TB
 - Discover topology (`discoverTopology(...)`) and report redundancy link health.
 - Execute CoE mailbox SDO upload/download paths with strict response matching (address/toggle/mailbox-counter), unrelated-frame filtering, and emergency-frame queueing.
 
+Internal decomposition strategy (Linux-only):
+- Facade class remains `LinuxRawSocketTransport`.
+- Linux-scoped implementation files split by responsibility:
+- `linux_raw_socket_transport.cpp` (core transport + AL/DC/state facade methods),
+- `linux_raw_socket_transport_mailbox.cpp` (mailbox engine/policy),
+- `linux_raw_socket_transport_foe_eoe.cpp` (FoE/EoE flows),
+- `linux_raw_socket_transport_topology.cpp` (topology discovery + redundancy health),
+- `linux_raw_socket_transport_process_image.cpp` (SM/FMMU process-image mapping).
+- See `docs/linux-transport-refactor-strategy.md` for guardrails and extraction roadmap.
+
 ### `oec::MockTransport`
 - Role: deterministic non-hardware transport for tests and demos.
 - Responsibilities:

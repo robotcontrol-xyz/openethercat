@@ -7,11 +7,14 @@
 
 #include <array>
 #include <cstdint>
+#include <functional>
 #include <queue>
 #include <string>
 #include <vector>
 
 #include "openethercat/master/coe_mailbox.hpp"
+#include "openethercat/transport/coe_mailbox_protocol.hpp"
+#include "openethercat/transport/ethercat_frame.hpp"
 #include "openethercat/transport/i_transport.hpp"
 
 namespace oec {
@@ -151,6 +154,129 @@ public:
     void resetDcDiagnostics();
 
 private:
+    // Mailbox policy/config helpers (Linux mailbox engine).
+    struct MailboxRetryConfig {
+        int retries = 2;
+        int backoffBaseMs = 1;
+        int backoffMaxMs = 20;
+    };
+
+    /**
+     * @brief Read mailbox retry/backoff tuning from environment variables.
+     */
+    MailboxRetryConfig mailboxRetryConfigFromEnv() const;
+    /**
+     * @brief Linux datagram send/receive wrapper bound to this transport instance.
+     */
+    bool sendDatagramRequest(const EthercatDatagramRequest& request,
+                             std::uint16_t& outWkc,
+                             std::vector<std::uint8_t>& outPayload,
+                             std::string& outError);
+
+    /**
+     * @brief Resolve mailbox read/write windows from ESC SM0/SM1 if available.
+     */
+    bool resolveMailboxWindow(std::uint16_t adp,
+                              std::uint16_t& writeOffset,
+                              std::uint16_t& writeSize,
+                              std::uint16_t& readOffset,
+                              std::uint16_t& readSize,
+                              std::string& outError);
+    /**
+     * @brief Encode and write one ESC mailbox frame to the slave write window.
+     */
+    bool mailboxWriteFrame(std::uint16_t adp,
+                           std::uint16_t writeOffset,
+                           std::uint16_t writeSize,
+                           std::uint8_t type,
+                           const std::vector<std::uint8_t>& payload,
+                           std::uint8_t& outCounter,
+                           std::string& outError);
+    /**
+     * @brief Read and decode a mailbox frame matching expected counter/type.
+     */
+    bool mailboxReadFrameExpected(std::uint16_t adp,
+                                  std::uint16_t slavePosition,
+                                  std::uint16_t readOffset,
+                                  std::uint16_t readSize,
+                                  std::uint8_t expectedCounter,
+                                  std::uint8_t expectedType,
+                                  bool enforceCounterMatch,
+                                  EscMailboxFrame& outFrame,
+                                  bool drainCoeEmergency,
+                                  const char* timeoutError,
+                                  std::string& outError);
+    /**
+     * @brief Execute one mailbox datagram with retry/backoff and error classification.
+     */
+    bool mailboxDatagramWithRetry(const EthercatDatagramRequest& request,
+                                  std::uint16_t& outWkc,
+                                  std::vector<std::uint8_t>& outPayload,
+                                  bool forceTimeoutTest,
+                                  int mailboxRetries,
+                                  int mailboxBackoffBaseMs,
+                                  int mailboxBackoffMaxMs,
+                                  MailboxErrorClass& outErrorClass,
+                                  std::string& outError);
+    /**
+     * @brief Read ESC sync-manager start/length with mailbox retry policy.
+     */
+    bool readSmWindowWithRetry(std::uint16_t adp,
+                               std::uint8_t smIndex,
+                               bool forceTimeoutTest,
+                               int mailboxRetries,
+                               int mailboxBackoffBaseMs,
+                               int mailboxBackoffMaxMs,
+                               MailboxErrorClass& outErrorClass,
+                               std::uint16_t& outStart,
+                               std::uint16_t& outLen,
+                               std::string& outError);
+    /**
+     * @brief Read ESC sync-manager status byte with mailbox retry policy.
+     */
+    bool readSmStatusWithRetry(std::uint16_t adp,
+                               std::uint8_t smIndex,
+                               bool forceTimeoutTest,
+                               int mailboxRetries,
+                               int mailboxBackoffBaseMs,
+                               int mailboxBackoffMaxMs,
+                               MailboxErrorClass& outErrorClass,
+                               std::uint8_t& outStatus,
+                               std::string& outError);
+    /**
+     * @brief Write CoE payload into mailbox SM0 window with optional status gating.
+     */
+    bool mailboxWriteCoePayload(std::uint16_t adp,
+                                std::uint16_t writeOffset,
+                                std::uint16_t writeSize,
+                                MailboxStatusMode statusMode,
+                                bool forceTimeoutTest,
+                                int mailboxRetries,
+                                int mailboxBackoffBaseMs,
+                                int mailboxBackoffMaxMs,
+                                const std::vector<std::uint8_t>& coePayload,
+                                std::uint8_t& outCounter,
+                                MailboxErrorClass& outErrorClass,
+                                std::string& outError);
+    /**
+     * @brief Read CoE mailbox frame matching expected counter and predicate.
+     */
+    bool mailboxReadMatchingCoe(std::uint16_t adp,
+                                std::uint16_t slavePosition,
+                                std::uint16_t readOffset,
+                                std::uint16_t readSize,
+                                MailboxStatusMode statusMode,
+                                bool forceTimeoutTest,
+                                int mailboxRetries,
+                                int mailboxBackoffBaseMs,
+                                int mailboxBackoffMaxMs,
+                                std::uint8_t expectedCounter,
+                                const std::function<bool(const EscMailboxFrame&)>& accept,
+                                EscMailboxFrame& outFrame,
+                                MailboxErrorClass& outErrorClass,
+                                std::string& outError);
+
+    // Process-image mapping bookkeeping for SM/FMMU logical windows.
     struct ProcessDataWindow {
         std::uint16_t slavePosition = 0U;
         std::uint16_t physicalStart = 0U;
