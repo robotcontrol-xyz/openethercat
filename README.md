@@ -242,11 +242,14 @@ sudo OEC_TRACE_MAP=1 OEC_TRACE_WKC=1 OEC_TRACE_OUTPUT_VERIFY=1 \
 - `docs/ds402-cubic-trajectory.md`: DS402 CSP motion example design and sequence.
 - `docs/ethercat-primer.md`: EtherCAT fundamentals, acronym glossary, and trace interpretation guide.
   Includes process-image structure diagrams and EL1004/EL2004 byte/bit mapping examples.
-- `docs/production-roadmap.md`: phased plan and acceptance gates for production readiness.
+- `roadmap/production-roadmap.md`: phased plan and acceptance gates for production readiness.
 - `docs/runtime-determinism.md`: RT scheduling/affinity/memory-lock guidance and Phase 2 KPI campaign recipe.
 - `docs/phase3-acceptance.md`: explicit Phase 3 software and physical validation checklist.
 - `docs/dependencies.md`: required/optional dependencies and install commands (Ubuntu/Raspberry Pi OS).
-- `docs/linux-transport-refactor-strategy.md`: SOLID/pattern guardrails for Linux transport refactoring.
+- `roadmap/linux-transport-refactor-strategy.md`: SOLID/pattern guardrails for Linux transport refactoring.
+- `roadmap/roadmap.md`: live execution roadmap and current phase status.
+- `roadmap/decision-log.md`: architecture decision history and rationale.
+- `roadmap/handover.md`: session continuity notes for future work.
 - `docs/ethercat-for-dummies.md`: beginner-friendly mini-book connecting EtherCAT fundamentals to this stack.
 
 ## Extension points

@@ -63,7 +63,7 @@ Internal decomposition strategy (Linux-only):
 - `linux_raw_socket_transport_foe_eoe.cpp` (FoE/EoE flows),
 - `linux_raw_socket_transport_topology.cpp` (topology discovery + redundancy health),
 - `linux_raw_socket_transport_process_image.cpp` (SM/FMMU process-image mapping).
-- See `docs/linux-transport-refactor-strategy.md` for guardrails and extraction roadmap.
+- See `roadmap/linux-transport-refactor-strategy.md` for guardrails and extraction roadmap.
 
 ### `oec::MockTransport`
 - Role: deterministic non-hardware transport for tests and demos.
