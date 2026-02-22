@@ -81,6 +81,14 @@ int main(int argc, char** argv) {
             // Keep default on parse errors.
         }
     }
+    bool traceDcQuality = false;
+    if (const char* env = std::getenv("OEC_TRACE_DC_QUALITY")) {
+        traceDcQuality = std::string(env) != "0";
+    }
+    bool traceDcQualityJson = false;
+    if (const char* env = std::getenv("OEC_DC_QUALITY_JSON")) {
+        traceDcQualityJson = std::string(env) != "0";
+    }
 
     oec::TransportFactoryConfig transportConfig;
     transportConfig.mockInputBytes = config.processImageInputBytes;
@@ -148,6 +156,33 @@ int main(int argc, char** argv) {
                           << " output_bit=" << (outputBit ? "ON" : "OFF")
                           << '\n';
             }
+            if (traceDcQuality && (cycle % traceCycleEvery) == 0) {
+                const auto q = master.distributedClockQuality();
+                const auto corr = master.lastAppliedDcCorrectionNs();
+                if (traceDcQualityJson) {
+                    std::cout << "{\"type\":\"dc_quality\",\"cycle\":" << cycle
+                              << ",\"enabled\":" << (q.enabled ? 1 : 0)
+                              << ",\"locked\":" << (q.locked ? 1 : 0)
+                              << ",\"phase_err_ns\":" << q.lastPhaseErrorNs
+                              << ",\"jitter_p95_ns\":" << q.jitterP95Ns
+                              << ",\"jitter_p99_ns\":" << q.jitterP99Ns
+                              << ",\"jitter_max_ns\":" << q.jitterMaxNs
+                              << ",\"policy_triggers\":" << q.policyTriggers
+                              << ",\"applied_corr_ns\":" << (corr.has_value() ? *corr : 0)
+                              << "}\n";
+                } else {
+                    std::cout << "[dc-quality] cycle=" << cycle
+                              << " enabled=" << (q.enabled ? 1 : 0)
+                              << " lock=" << (q.locked ? 1 : 0)
+                              << " phase_err_ns=" << q.lastPhaseErrorNs
+                              << " jitter_p95_ns=" << q.jitterP95Ns
+                              << " jitter_p99_ns=" << q.jitterP99Ns
+                              << " jitter_max_ns=" << q.jitterMaxNs
+                              << " policy_triggers=" << q.policyTriggers
+                              << " applied_corr_ns=" << (corr.has_value() ? *corr : 0)
+                              << '\n';
+                }
+            }
 
             std::this_thread::sleep_for(150ms);
             ++cycle;
@@ -182,6 +217,33 @@ int main(int argc, char** argv) {
                           << " input=" << (haveInput ? (observedInput ? "ON" : "OFF") : "n/a")
                           << " output_cmd=" << (driveOutput ? "ON" : "OFF")
                           << '\n';
+            }
+            if (traceDcQuality && (cycle % traceCycleEvery) == 0) {
+                const auto q = master.distributedClockQuality();
+                const auto corr = master.lastAppliedDcCorrectionNs();
+                if (traceDcQualityJson) {
+                    std::cout << "{\"type\":\"dc_quality\",\"cycle\":" << cycle
+                              << ",\"enabled\":" << (q.enabled ? 1 : 0)
+                              << ",\"locked\":" << (q.locked ? 1 : 0)
+                              << ",\"phase_err_ns\":" << q.lastPhaseErrorNs
+                              << ",\"jitter_p95_ns\":" << q.jitterP95Ns
+                              << ",\"jitter_p99_ns\":" << q.jitterP99Ns
+                              << ",\"jitter_max_ns\":" << q.jitterMaxNs
+                              << ",\"policy_triggers\":" << q.policyTriggers
+                              << ",\"applied_corr_ns\":" << (corr.has_value() ? *corr : 0)
+                              << "}\n";
+                } else {
+                    std::cout << "[dc-quality] cycle=" << cycle
+                              << " enabled=" << (q.enabled ? 1 : 0)
+                              << " lock=" << (q.locked ? 1 : 0)
+                              << " phase_err_ns=" << q.lastPhaseErrorNs
+                              << " jitter_p95_ns=" << q.jitterP95Ns
+                              << " jitter_p99_ns=" << q.jitterP99Ns
+                              << " jitter_max_ns=" << q.jitterMaxNs
+                              << " policy_triggers=" << q.policyTriggers
+                              << " applied_corr_ns=" << (corr.has_value() ? *corr : 0)
+                              << '\n';
+                }
             }
             std::this_thread::sleep_for(5ms);
             ++cycle;

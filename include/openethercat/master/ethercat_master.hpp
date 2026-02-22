@@ -253,6 +253,8 @@ private:
     DcSyncQualitySnapshot dcSyncQuality_{};
     std::deque<std::int64_t> dcPhaseErrorAbsHistoryNs_;
     bool dcPolicyLatched_ = false;
+    bool traceDc_ = false;
+    std::uint64_t dcTraceCounter_ = 0;
     TopologyManager topologyManager_;
     IoMapper mapper_;
     NetworkConfiguration config_{};

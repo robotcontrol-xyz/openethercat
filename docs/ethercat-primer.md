@@ -224,3 +224,9 @@ For DC sync quality supervision and policy actions:
 - `OEC_DC_SYNC_MAX_OOW_CYCLES=<N>`: consecutive out-of-window cycles before policy trigger.
 - `OEC_DC_SYNC_HISTORY_WINDOW=<N>`: rolling sample window for jitter percentiles.
 - `OEC_DC_SYNC_ACTION=warn|degrade|recover`: policy when out-of-window threshold is exceeded.
+
+Debug visibility knobs:
+
+- `OEC_TRACE_DC=1`: emit per-cycle DC trace from master closed-loop path (`ref_ns`, `host_ns`, `phase_err_ns`, raw/applied correction, lock transition).
+- `OEC_TRACE_DC_QUALITY=1`: emit periodic DC quality snapshots in `beckhoff_io_demo`.
+- `OEC_DC_QUALITY_JSON=1`: format `beckhoff_io_demo` DC quality snapshots as JSON lines.

@@ -14,6 +14,7 @@
 #include <cmath>
 #include <type_traits>
 #include <vector>
+#include <iostream>
 
 #include "openethercat/transport/linux_raw_socket_transport.hpp"
 
@@ -132,6 +133,7 @@ bool EthercatMaster::configure(const NetworkConfiguration& config) {
     dcSyncQuality_ = DcSyncQualitySnapshot{};
     dcPhaseErrorAbsHistoryNs_.clear();
     dcPolicyLatched_ = false;
+    dcTraceCounter_ = 0;
 
     // Validate before binding signals to avoid partially configured runtime state.
     const auto issues = ConfigurationValidator::validate(config);
@@ -579,6 +581,8 @@ void EthercatMaster::configureDcClosedLoopFromEnvironment() {
     dcSyncQualityOptions_.policyAction = parseDcPolicyAction(
         std::getenv("OEC_DC_SYNC_ACTION"),
         dcSyncQualityOptions_.policyAction);
+    traceDc_ = parseBoolEnv("OEC_TRACE_DC", false);
+    dcTraceCounter_ = 0;
 
     dcSyncQuality_ = DcSyncQualitySnapshot{};
     dcSyncQuality_.enabled = dcSyncQualityOptions_.enabled;
@@ -621,6 +625,7 @@ bool EthercatMaster::runDcClosedLoopUpdate() {
     DcSyncSample sample;
     sample.referenceTimeNs = slaveTimeNs;
     sample.localTimeNs = hostTimeNs;
+    const bool wasLocked = dcSyncQuality_.locked;
     const auto correction = dcController_.update(sample);
     updateDcSyncQualityLocked(sample.referenceTimeNs - sample.localTimeNs);
     if (!correction.has_value()) {
@@ -639,6 +644,28 @@ bool EthercatMaster::runDcClosedLoopUpdate() {
     }
 
     lastAppliedDcCorrectionNs_ = safeCorrection;
+    if (traceDc_) {
+        const bool isLocked = dcSyncQuality_.locked;
+        const char* transition = "none";
+        if (!wasLocked && isLocked) {
+            transition = "acquired";
+        } else if (wasLocked && !isLocked) {
+            transition = "lost";
+        }
+        std::cout << "[oec-dc] cycle=" << dcTraceCounter_
+                  << " ref_slave=" << dcClosedLoopOptions_.referenceSlavePosition
+                  << " ref_ns=" << sample.referenceTimeNs
+                  << " host_ns=" << sample.localTimeNs
+                  << " phase_err_ns=" << (sample.referenceTimeNs - sample.localTimeNs)
+                  << " raw_corr_ns=" << *correction
+                  << " applied_corr_ns=" << safeCorrection
+                  << " lock=" << (isLocked ? "1" : "0")
+                  << " lock_transition=" << transition
+                  << " jitter_p95_ns=" << dcSyncQuality_.jitterP95Ns
+                  << " jitter_p99_ns=" << dcSyncQuality_.jitterP99Ns
+                  << '\n';
+    }
+    ++dcTraceCounter_;
     return true;
 }
 

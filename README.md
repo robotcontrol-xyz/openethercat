@@ -97,6 +97,12 @@ OEC_DC_SYNC_MONITOR=1 OEC_DC_SYNC_MAX_PHASE_ERROR_NS=50000 \
 OEC_DC_SYNC_LOCK_ACQUIRE_CYCLES=20 OEC_DC_SYNC_MAX_OOW_CYCLES=10 \
 OEC_DC_SYNC_ACTION=warn \
   sudo ./build/beckhoff_io_demo linux:eth0
+# Runtime DC traces from master cycle path:
+OEC_DC_CLOSED_LOOP=1 OEC_TRACE_DC=1 sudo ./build/beckhoff_io_demo linux:eth0
+# Demo-level periodic DC quality snapshots (text or JSON):
+OEC_TRACE_DC_QUALITY=1 OEC_TRACE_CYCLE_EVERY=100 sudo ./build/beckhoff_io_demo linux:eth0
+OEC_TRACE_DC_QUALITY=1 OEC_DC_QUALITY_JSON=1 OEC_TRACE_CYCLE_EVERY=100 \
+  sudo ./build/beckhoff_io_demo linux:eth0
 ```
 
 The demo uses `MockTransport` so it runs without root and without EtherCAT hardware.
