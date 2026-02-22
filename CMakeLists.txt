@@ -32,6 +32,8 @@ add_library(openethercat
     src/transport/linux_raw_socket_transport_foe_eoe.cpp
     src/transport/linux_raw_socket_transport_topology.cpp
     src/transport/linux_raw_socket_transport_process_image.cpp
+    src/transport/linux_raw_socket_transport_state_dc.cpp
+    src/transport/linux_raw_socket_transport_core_io.cpp
     src/transport/coe_mailbox_protocol.cpp
     src/transport/ethercat_frame.cpp
     src/transport/mock_transport.cpp
@@ -138,6 +140,10 @@ if(OEC_BUILD_TESTS)
     add_executable(coe_mailbox_protocol_tests tests/coe_mailbox_protocol_tests.cpp)
     target_link_libraries(coe_mailbox_protocol_tests PRIVATE openethercat)
     add_test(NAME coe_mailbox_protocol_tests COMMAND coe_mailbox_protocol_tests)
+
+    add_executable(transport_module_boundary_tests tests/transport_module_boundary_tests.cpp)
+    target_compile_definitions(transport_module_boundary_tests PRIVATE OEC_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+    add_test(NAME transport_module_boundary_tests COMMAND transport_module_boundary_tests)
 endif()
 
 if(OEC_BUILD_DOCS)

@@ -84,10 +84,12 @@ For each extraction step:
    - `coe_mailbox_protocol_tests`
 4. Prefer small, reversible commits.
 
-## Next recommended extraction steps
+## Cohesion guard status
 
-1. Split AL/DC register helpers into `linux_raw_socket_transport_state_dc.cpp`.
-2. Optionally isolate socket open/frame I/O primitives into `linux_raw_socket_transport_core_io.cpp`.
-3. Add lightweight internal cohesion checks for module-boundary drift.
+- Module-boundary regression checks are now implemented via `transport_module_boundary_tests`.
+- Refactor guard tests continue to include:
+  - `advanced_systems_tests`
+  - `coe_mailbox_protocol_tests`
+  - `transport_module_boundary_tests`
 
 At each step, keep facade behavior stable and diagnostics unchanged.

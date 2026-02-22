@@ -34,17 +34,9 @@ constexpr std::uint16_t kEtherTypeEthercat = 0x88A4;
 constexpr std::uint8_t kCommandLrw = 0x0C;
 constexpr std::uint8_t kCommandLrd = 0x0A;
 constexpr std::uint8_t kCommandLwr = 0x0B;
-constexpr std::uint8_t kCommandBrd = 0x07;
-constexpr std::uint8_t kCommandBwr = 0x08;
 constexpr std::uint8_t kCommandAprd = 0x01;
 constexpr std::uint8_t kCommandApwr = 0x02;
-constexpr std::uint16_t kRegisterAlControl = 0x0120;
-constexpr std::uint16_t kRegisterAlStatus = 0x0130;
-constexpr std::uint16_t kRegisterAlStatusCode = 0x0134;
-constexpr std::uint16_t kRegisterDcSystemTime = 0x0910;
-constexpr std::uint16_t kRegisterDcSystemTimeOffset = 0x0920;
 constexpr std::uint16_t kRegisterSmBase = 0x0800;
-constexpr std::uint16_t kAlStateMask = 0x000F;
 
 bool sendAndReceiveDatagram(
     int socketFd,
@@ -58,73 +50,6 @@ bool sendAndReceiveDatagram(
     std::uint16_t& outWkc,
     std::vector<std::uint8_t>& outPayload,
     std::string& outError);
-
-bool openEthercatInterfaceSocket(const std::string& ifname,
-                                 int& outSocketFd,
-                                 int& outIfIndex,
-                                 std::array<std::uint8_t, 6>& outSourceMac,
-                                 std::string& outError) {
-    outSocketFd = ::socket(AF_PACKET, SOCK_RAW, htons(kEtherTypeEthercat));
-    if (outSocketFd < 0) {
-        outError = "socket() failed: " + std::string(std::strerror(errno));
-        return false;
-    }
-
-    ifreq ifr {};
-    std::strncpy(ifr.ifr_name, ifname.c_str(), IFNAMSIZ - 1);
-    if (::ioctl(outSocketFd, SIOCGIFINDEX, &ifr) < 0) {
-        outError = "ioctl(SIOCGIFINDEX) failed: " + std::string(std::strerror(errno));
-        ::close(outSocketFd);
-        outSocketFd = -1;
-        return false;
-    }
-    outIfIndex = ifr.ifr_ifindex;
-
-    if (::ioctl(outSocketFd, SIOCGIFHWADDR, &ifr) < 0) {
-        outError = "ioctl(SIOCGIFHWADDR) failed: " + std::string(std::strerror(errno));
-        ::close(outSocketFd);
-        outSocketFd = -1;
-        return false;
-    }
-    for (std::size_t i = 0; i < outSourceMac.size(); ++i) {
-        outSourceMac[i] = static_cast<std::uint8_t>(ifr.ifr_hwaddr.sa_data[i]);
-    }
-
-    sockaddr_ll sll {};
-    sll.sll_family = AF_PACKET;
-    sll.sll_protocol = htons(kEtherTypeEthercat);
-    sll.sll_ifindex = outIfIndex;
-    if (::bind(outSocketFd, reinterpret_cast<sockaddr*>(&sll), sizeof(sll)) < 0) {
-        outError = "bind() failed: " + std::string(std::strerror(errno));
-        ::close(outSocketFd);
-        outSocketFd = -1;
-        return false;
-    }
-
-    return true;
-}
-
-bool decodeAlState(std::uint16_t rawState, SlaveState& out) {
-    switch (rawState & kAlStateMask) {
-    case 0x01:
-        out = SlaveState::Init;
-        return true;
-    case 0x02:
-        out = SlaveState::PreOp;
-        return true;
-    case 0x03:
-        out = SlaveState::Bootstrap;
-        return true;
-    case 0x04:
-        out = SlaveState::SafeOp;
-        return true;
-    case 0x08:
-        out = SlaveState::Op;
-        return true;
-    default:
-        return false;
-    }
-}
 
 std::uint16_t toAutoIncrementAddress(std::uint16_t position) {
     // EtherCAT auto-increment addresses are signed: 0, -1, -2, ...
@@ -143,27 +68,9 @@ const char* commandName(std::uint8_t cmd) {
         return "APRD";
     case kCommandApwr:
         return "APWR";
-    case kCommandBrd:
-        return "BRD";
-    case kCommandBwr:
-        return "BWR";
     default:
         return "CMD";
     }
-}
-
-MailboxStatusMode parseMailboxStatusMode(const char* value) {
-    if (value == nullptr) {
-        return MailboxStatusMode::Hybrid;
-    }
-    const std::string text(value);
-    if (text == "strict") {
-        return MailboxStatusMode::Strict;
-    }
-    if (text == "poll") {
-        return MailboxStatusMode::Poll;
-    }
-    return MailboxStatusMode::Hybrid;
 }
 
 void incrementMailboxErrorClassCounter(MailboxDiagnostics& diagnostics, MailboxErrorClass cls) {
@@ -324,21 +231,6 @@ bool mailboxAprd(int socketFd,
     return true;
 }
 
-std::int64_t readLe64Signed(const std::vector<std::uint8_t>& data, std::size_t offset) {
-    std::uint64_t v = 0U;
-    for (std::size_t i = 0; i < 8U; ++i) {
-        v |= (static_cast<std::uint64_t>(data[offset + i]) << (8U * i));
-    }
-    return static_cast<std::int64_t>(v);
-}
-
-void writeLe64Signed(std::vector<std::uint8_t>& out, std::int64_t value) {
-    const auto u = static_cast<std::uint64_t>(value);
-    for (std::size_t i = 0; i < 8U; ++i) {
-        out.push_back(static_cast<std::uint8_t>((u >> (8U * i)) & 0xFFU));
-    }
-}
-
 bool sendAndReceiveDatagram(
     int socketFd,
     int ifIndex,
@@ -459,62 +351,6 @@ void LinuxRawSocketTransport::setMailboxConfiguration(std::uint16_t writeOffset,
     mailboxWriteSize_ = writeSize;
     mailboxReadOffset_ = readOffset;
     mailboxReadSize_ = readSize;
-}
-
-bool LinuxRawSocketTransport::open() {
-    close();
-    mailboxStatusMode_ = parseMailboxStatusMode(std::getenv("OEC_MAILBOX_STATUS_MODE"));
-    if (const char* env = std::getenv("OEC_MAILBOX_EMERGENCY_QUEUE_LIMIT")) {
-        try {
-            emergencyQueueLimit_ = std::max<std::size_t>(1U, static_cast<std::size_t>(std::stoul(env, nullptr, 0)));
-        } catch (...) {
-            // Keep default on parse failure.
-        }
-    }
-    lastWorkingCounter_ = 0;
-    lastOutputWorkingCounter_ = 0;
-    lastInputWorkingCounter_ = 0;
-    lastMailboxErrorClass_ = MailboxErrorClass::None;
-    dcDiagnostics_ = DcDiagnostics{};
-    if (!openEthercatInterfaceSocket(ifname_, socketFd_, ifIndex_, sourceMac_, error_)) {
-        close();
-        return false;
-    }
-
-    if (redundancyEnabled_ && !secondaryIfname_.empty()) {
-        std::array<std::uint8_t, 6> secondaryMac {};
-        if (!openEthercatInterfaceSocket(secondaryIfname_, secondarySocketFd_, secondaryIfIndex_,
-                                         secondaryMac, error_)) {
-            close();
-            return false;
-        }
-    }
-
-    error_.clear();
-    return true;
-}
-
-void LinuxRawSocketTransport::close() {
-    if (socketFd_ >= 0) {
-        ::close(socketFd_);
-        socketFd_ = -1;
-    }
-    ifIndex_ = 0;
-    if (secondarySocketFd_ >= 0) {
-        ::close(secondarySocketFd_);
-        secondarySocketFd_ = -1;
-    }
-    secondaryIfIndex_ = 0;
-    lastWorkingCounter_ = 0;
-    lastOutputWorkingCounter_ = 0;
-    lastInputWorkingCounter_ = 0;
-    lastFrameUsedSecondary_ = false;
-    outputWindows_.clear();
-    while (!emergencies_.empty()) {
-        emergencies_.pop();
-    }
-    lastMailboxErrorClass_ = MailboxErrorClass::None;
-    dcDiagnostics_ = DcDiagnostics{};
 }
 
 bool LinuxRawSocketTransport::exchange(const std::vector<std::uint8_t>& txProcessData,
@@ -671,245 +507,6 @@ bool LinuxRawSocketTransport::exchange(const std::vector<std::uint8_t>& txProces
     lastWorkingCounter_ = lrdWkc;
     rxProcessData = std::move(lrdPayload);
     error_.clear();
-    return true;
-}
-
-bool LinuxRawSocketTransport::requestNetworkState(SlaveState state) {
-    if (socketFd_ < 0) {
-        error_ = "transport not open";
-        return false;
-    }
-
-    const auto currentIndex = datagramIndex_++;
-    EthercatDatagramRequest request;
-    request.command = kCommandBwr;
-    request.datagramIndex = currentIndex;
-    request.adp = 0x0000;
-    request.ado = kRegisterAlControl;
-    request.payload = {static_cast<std::uint8_t>(state), 0x00U};
-
-    std::uint16_t wkc = 0;
-    std::vector<std::uint8_t> payload;
-    if (!sendAndReceiveDatagram(socketFd_, ifIndex_, timeoutMs_, maxFramesPerCycle_,
-                                expectedWorkingCounter_, destinationMac_, sourceMac_,
-                                request, wkc, payload, error_)) {
-        return false;
-    }
-
-    lastWorkingCounter_ = wkc;
-    return true;
-}
-
-bool LinuxRawSocketTransport::readNetworkState(SlaveState& outState) {
-    if (socketFd_ < 0) {
-        error_ = "transport not open";
-        return false;
-    }
-
-    const auto currentIndex = datagramIndex_++;
-    EthercatDatagramRequest request;
-    request.command = kCommandBrd;
-    request.datagramIndex = currentIndex;
-    request.adp = 0x0000;
-    request.ado = kRegisterAlStatus;
-    request.payload = {0x00U, 0x00U};
-
-    std::uint16_t wkc = 0;
-    std::vector<std::uint8_t> payload;
-    if (!sendAndReceiveDatagram(socketFd_, ifIndex_, timeoutMs_, maxFramesPerCycle_,
-                                expectedWorkingCounter_, destinationMac_, sourceMac_,
-                                request, wkc, payload, error_)) {
-        return false;
-    }
-    if (payload.size() < 2) {
-        error_ = "state read payload too short";
-        return false;
-    }
-
-    const auto raw = static_cast<std::uint16_t>(
-        static_cast<std::uint16_t>(payload[0]) |
-        (static_cast<std::uint16_t>(payload[1]) << 8U));
-    SlaveState decoded = SlaveState::Init;
-    if (!decodeAlState(raw, decoded)) {
-        error_ = "unknown AL state value";
-        return false;
-    }
-
-    lastWorkingCounter_ = wkc;
-    outState = decoded;
-    return true;
-}
-
-bool LinuxRawSocketTransport::requestSlaveState(std::uint16_t position, SlaveState state) {
-    if (socketFd_ < 0) {
-        error_ = "transport not open";
-        return false;
-    }
-
-    const auto currentIndex = datagramIndex_++;
-    EthercatDatagramRequest request;
-    request.command = kCommandApwr;
-    request.datagramIndex = currentIndex;
-    request.adp = toAutoIncrementAddress(position);
-    request.ado = kRegisterAlControl;
-    request.payload = {static_cast<std::uint8_t>(state), 0x00U};
-
-    std::uint16_t wkc = 0;
-    std::vector<std::uint8_t> payload;
-    if (!sendAndReceiveDatagram(socketFd_, ifIndex_, timeoutMs_, maxFramesPerCycle_,
-                                expectedWorkingCounter_, destinationMac_, sourceMac_,
-                                request, wkc, payload, error_)) {
-        return false;
-    }
-    lastWorkingCounter_ = wkc;
-    return true;
-}
-
-bool LinuxRawSocketTransport::readSlaveState(std::uint16_t position, SlaveState& outState) {
-    if (socketFd_ < 0) {
-        error_ = "transport not open";
-        return false;
-    }
-
-    const auto currentIndex = datagramIndex_++;
-    EthercatDatagramRequest request;
-    request.command = kCommandAprd;
-    request.datagramIndex = currentIndex;
-    request.adp = toAutoIncrementAddress(position);
-    request.ado = kRegisterAlStatus;
-    request.payload = {0x00U, 0x00U};
-
-    std::uint16_t wkc = 0;
-    std::vector<std::uint8_t> payload;
-    if (!sendAndReceiveDatagram(socketFd_, ifIndex_, timeoutMs_, maxFramesPerCycle_,
-                                expectedWorkingCounter_, destinationMac_, sourceMac_,
-                                request, wkc, payload, error_)) {
-        return false;
-    }
-    if (payload.size() < 2) {
-        error_ = "state read payload too short";
-        return false;
-    }
-
-    const auto raw = static_cast<std::uint16_t>(
-        static_cast<std::uint16_t>(payload[0]) |
-        (static_cast<std::uint16_t>(payload[1]) << 8U));
-    SlaveState decoded = SlaveState::Init;
-    if (!decodeAlState(raw, decoded)) {
-        error_ = "unknown AL state value";
-        return false;
-    }
-
-    lastWorkingCounter_ = wkc;
-    outState = decoded;
-    return true;
-}
-
-bool LinuxRawSocketTransport::readSlaveAlStatusCode(std::uint16_t position, std::uint16_t& outCode) {
-    if (socketFd_ < 0) {
-        error_ = "transport not open";
-        return false;
-    }
-
-    const auto currentIndex = datagramIndex_++;
-    EthercatDatagramRequest request;
-    request.command = kCommandAprd;
-    request.datagramIndex = currentIndex;
-    request.adp = toAutoIncrementAddress(position);
-    request.ado = kRegisterAlStatusCode;
-    request.payload = {0x00U, 0x00U};
-
-    std::uint16_t wkc = 0;
-    std::vector<std::uint8_t> payload;
-    if (!sendAndReceiveDatagram(socketFd_, ifIndex_, timeoutMs_, maxFramesPerCycle_,
-                                expectedWorkingCounter_, destinationMac_, sourceMac_,
-                                request, wkc, payload, error_)) {
-        return false;
-    }
-    if (payload.size() < 2) {
-        error_ = "AL status code payload too short";
-        return false;
-    }
-
-    outCode = static_cast<std::uint16_t>(
-        static_cast<std::uint16_t>(payload[0]) |
-        (static_cast<std::uint16_t>(payload[1]) << 8U));
-    lastWorkingCounter_ = wkc;
-    return true;
-}
-
-bool LinuxRawSocketTransport::readDcSystemTime(std::uint16_t slavePosition,
-                                               std::int64_t& outSlaveTimeNs,
-                                               std::string& outError) {
-    ++dcDiagnostics_.readAttempts;
-    outError.clear();
-    if (socketFd_ < 0) {
-        outError = "transport not open";
-        ++dcDiagnostics_.readFailure;
-        return false;
-    }
-
-    const auto currentIndex = datagramIndex_++;
-    EthercatDatagramRequest request;
-    request.command = kCommandAprd;
-    request.datagramIndex = currentIndex;
-    request.adp = toAutoIncrementAddress(slavePosition);
-    request.ado = kRegisterDcSystemTime;
-    request.payload.assign(8U, 0U);
-
-    std::uint16_t wkc = 0;
-    std::vector<std::uint8_t> payload;
-    if (!sendAndReceiveDatagram(socketFd_, ifIndex_, timeoutMs_, maxFramesPerCycle_,
-                                expectedWorkingCounter_, destinationMac_, sourceMac_,
-                                request, wkc, payload, outError)) {
-        ++dcDiagnostics_.readFailure;
-        return false;
-    }
-    if (payload.size() < 8U) {
-        outError = "DC system time payload too short";
-        ++dcDiagnostics_.readInvalidPayload;
-        ++dcDiagnostics_.readFailure;
-        return false;
-    }
-
-    outSlaveTimeNs = readLe64Signed(payload, 0U);
-    lastWorkingCounter_ = wkc;
-    ++dcDiagnostics_.readSuccess;
-    return true;
-}
-
-bool LinuxRawSocketTransport::writeDcSystemTimeOffset(std::uint16_t slavePosition,
-                                                      std::int64_t offsetNs,
-                                                      std::string& outError) {
-    ++dcDiagnostics_.writeAttempts;
-    outError.clear();
-    if (socketFd_ < 0) {
-        outError = "transport not open";
-        ++dcDiagnostics_.writeFailure;
-        return false;
-    }
-
-    const auto currentIndex = datagramIndex_++;
-    EthercatDatagramRequest request;
-    request.command = kCommandApwr;
-    request.datagramIndex = currentIndex;
-    request.adp = toAutoIncrementAddress(slavePosition);
-    request.ado = kRegisterDcSystemTimeOffset;
-    request.payload.clear();
-    request.payload.reserve(8U);
-    writeLe64Signed(request.payload, offsetNs);
-
-    std::uint16_t wkc = 0;
-    std::vector<std::uint8_t> payload;
-    if (!sendAndReceiveDatagram(socketFd_, ifIndex_, timeoutMs_, maxFramesPerCycle_,
-                                expectedWorkingCounter_, destinationMac_, sourceMac_,
-                                request, wkc, payload, outError)) {
-        ++dcDiagnostics_.writeFailure;
-        return false;
-    }
-
-    lastWorkingCounter_ = wkc;
-    ++dcDiagnostics_.writeSuccess;
     return true;
 }
 
@@ -1543,15 +1140,6 @@ bool LinuxRawSocketTransport::mailboxDatagramWithRetry(const EthercatDatagramReq
         }
     }
     return false;
-}
-
-bool LinuxRawSocketTransport::sendDatagramRequest(const EthercatDatagramRequest& request,
-                                                  std::uint16_t& outWkc,
-                                                  std::vector<std::uint8_t>& outPayload,
-                                                  std::string& outError) {
-    return sendAndReceiveDatagram(socketFd_, ifIndex_, timeoutMs_, maxFramesPerCycle_,
-                                  expectedWorkingCounter_, destinationMac_, sourceMac_,
-                                  request, outWkc, outPayload, outError);
 }
 
 std::string LinuxRawSocketTransport::lastError() const { return error_; }

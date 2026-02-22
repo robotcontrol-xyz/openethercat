@@ -245,6 +245,7 @@ sudo OEC_TRACE_MAP=1 OEC_TRACE_WKC=1 OEC_TRACE_OUTPUT_VERIFY=1 \
 - `roadmap/production-roadmap.md`: phased plan and acceptance gates for production readiness.
 - `docs/runtime-determinism.md`: RT scheduling/affinity/memory-lock guidance and Phase 2 KPI campaign recipe.
 - `docs/phase3-acceptance.md`: explicit Phase 3 software and physical validation checklist.
+- `docs/hil-validation-matrix.md`: executable mock/physical HIL matrix and KPI/reporting gates.
 - `docs/dependencies.md`: required/optional dependencies and install commands (Ubuntu/Raspberry Pi OS).
 - `roadmap/linux-transport-refactor-strategy.md`: SOLID/pattern guardrails for Linux transport refactoring.
 - `roadmap/roadmap.md`: live execution roadmap and current phase status.
@@ -260,3 +261,15 @@ sudo OEC_TRACE_MAP=1 OEC_TRACE_WKC=1 OEC_TRACE_OUTPUT_VERIFY=1 \
 - Wire distributed-clock correction to hardware timing registers and NIC clock sources.
 - Add physical-line topology scan/redundancy switchover handling.
 - Run long-duration HIL soak/conformance matrix on real slave chains.
+
+## HIL Matrix Runner
+
+Use the automation script to execute the standard HIL matrix and archive artifacts:
+
+```bash
+scripts/hil/run_hil_matrix.sh --mode mock
+scripts/hil/run_hil_matrix.sh --mode physical --iface linux:enp2s0 --with-sudo
+scripts/hil/run_hil_matrix.sh --mode all --iface linux:enp2s0 --with-sudo
+```
+
+Artifacts are written to `artifacts/hil/<timestamp>/` (`summary.md`, `summary.csv`, `environment.txt`, `logs/`).

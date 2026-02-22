@@ -35,10 +35,8 @@ This roadmap tracks production-hardening work for the C++17 Linux-focused EtherC
 
 ## Next steps (ordered)
 
-1. Split AL/DC register helpers into `linux_raw_socket_transport_state_dc.cpp`.
-2. Optionally split socket/frame primitives into `linux_raw_socket_transport_core_io.cpp`.
-3. Add module-boundary regression checks and keep mailbox/system tests as required refactor gates.
-4. Run extended physical HIL validation after refactor settles.
+1. Execute Tier-1 and Tier-2 physical HIL matrix runs with `scripts/hil/run_hil_matrix.sh`.
+2. Archive KPI evidence and compare trend stability across repeated runs.
 
 ## Validation gate for each refactor step
 
@@ -48,4 +46,3 @@ This roadmap tracks production-hardening work for the C++17 Linux-focused EtherC
   - `coe_mailbox_protocol_tests`
 - Tests must pass before commit.
 - No public API break unless explicitly planned.
-

@@ -29,7 +29,7 @@ Current in-progress context includes:
 
 1. Update any remaining references from `docs/...roadmap...` to `roadmap/...`.
 2. Commit relocation/context-doc updates as one coherent docs+structure commit.
-3. Continue refactor with `linux_raw_socket_transport_state_dc.cpp` extraction.
+3. Run extended physical HIL validation matrix now that module boundaries are guarded by tests.
 
 ## Verification commands
 
@@ -37,5 +37,5 @@ Current in-progress context includes:
 cmake --build build-local -j4 --target openethercat advanced_systems_tests coe_mailbox_protocol_tests
 ./build-local/advanced_systems_tests
 ./build-local/coe_mailbox_protocol_tests
+./build-local/transport_module_boundary_tests
 ```
-
