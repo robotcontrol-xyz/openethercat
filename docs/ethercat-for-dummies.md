@@ -252,32 +252,137 @@ In this stack:
 
 Distributed clocks synchronize timing reference across slaves and master control loop.
 
-This stack includes:
+### 8.1 What DC solves
 
-- PI correction controller,
-- correction clamps and slew limiting,
-- lock/loss supervision,
-- out-of-window policy actions,
-- runtime trace/telemetry hooks.
+Without DC, each slave and the host scheduler run on independent clocks. Over time this creates phase drift:
 
-### Control concepts
+- outputs are applied with varying phase relative to task cycle,
+- input sampling phase moves,
+- control loops experience jitter/noise not caused by the plant.
 
-- phase error: `referenceTime - localTime`.
-- filtered error: low-pass or exponential smoothing before control action.
-- correction output: bounded control effort to avoid unstable steps.
+DC provides a common notion of time and lets the master align cyclic execution to that timebase.
 
-### Runtime knobs (selected)
+### 8.2 Practical DC time model
 
-- `OEC_DC_CLOSED_LOOP`
-- `OEC_DC_KP`, `OEC_DC_KI`, `OEC_DC_FILTER_ALPHA`
-- `OEC_DC_CORRECTION_CLAMP_NS`
-- `OEC_DC_MAX_CORR_STEP_NS`, `OEC_DC_MAX_SLEW_NS`
-- `OEC_DC_SYNC_MONITOR`, `OEC_DC_SYNC_ACTION`
+Define:
 
-### Relevant demos
+- `Tref`: reference DC time (typically selected slave clock),
+- `Thost`: host time used by the cyclic controller,
+- phase error `e = Tref - Thost`.
 
-- `dc_hardware_sync_demo`: focused DC register/control exploration.
-- `dc_soak_demo`: long-run timing + lock/jitter KPI collection.
+In this stack, correction is computed from filtered phase error:
+
+- `e_f(k) = (1-a)*e_f(k-1) + a*e(k)` where `a = filterAlpha`
+- PI output `u(k) = Kp*e_f(k) + Ki*sum(e_f)`
+- output clamped and slew-limited before writing offset.
+
+Why clamping/slew matters:
+
+- prevents large abrupt offset jumps,
+- avoids control chatter when clock noise spikes,
+- protects against unstable tuning on slower CPUs/NIC paths.
+
+### 8.3 DC register path in this stack
+
+Linux transport currently uses per-slave DC register read/write primitives:
+
+- read DC system time,
+- write DC system time offset.
+
+These are used by:
+
+- `dc_hardware_sync_demo` (focused loop),
+- optional in-master closed loop in `runCycle()` when enabled.
+
+Current scope note:
+
+- this is a practical hardware prototype path,
+- not yet a full hardware-wired Sync0/Sync1 phase-control implementation with NIC timestamp coupling.
+
+### 8.4 Closed-loop integration in `EthercatMaster`
+
+When `OEC_DC_CLOSED_LOOP=1`, each cycle can do:
+
+1. read reference slave DC time,
+2. compute phase error using host steady clock (+ optional target phase),
+3. run PI controller,
+4. apply correction limits,
+5. write DC offset,
+6. update sync quality monitor.
+
+This couples DC behavior directly to your cyclic master loop, which is where control determinism matters.
+
+### 8.5 Sync quality supervision
+
+The stack tracks quality beyond raw correction:
+
+- in-window / out-of-window phase error counters,
+- lock acquisition and lock loss counts,
+- rolling jitter percentiles (`p50/p95/p99/max`),
+- policy triggers (`warn`, `degrade`, `recover`).
+
+This turns DC from a black box into a measurable control subsystem.
+
+### 8.6 Tuning strategy (field-proven workflow)
+
+1. Start conservative:
+- low `Kp`, very low `Ki`,
+- modest clamp/slew limits.
+
+2. Observe:
+- `phase_err_ns`,
+- `jitter_p99_ns`,
+- lock stability,
+- policy trigger frequency.
+
+3. Increase gains gradually:
+- improve convergence without oscillation.
+
+4. Tighten limits:
+- only after stable lock across long soaks.
+
+Bad tuning signatures:
+
+- alternating large positive/negative corrections,
+- repeated lock loss and re-acquire,
+- rising policy triggers with no cable faults.
+
+### 8.7 Runtime knobs (selected)
+
+- `OEC_DC_CLOSED_LOOP=1`
+- `OEC_DC_REFERENCE_SLAVE=<pos>`
+- `OEC_DC_TARGET_PHASE_NS=<ns>`
+- `OEC_DC_FILTER_ALPHA=<0..1>`
+- `OEC_DC_KP=<gain>`
+- `OEC_DC_KI=<gain>`
+- `OEC_DC_CORRECTION_CLAMP_NS=<ns>`
+- `OEC_DC_MAX_CORR_STEP_NS=<ns>`
+- `OEC_DC_MAX_SLEW_NS=<ns>`
+- `OEC_DC_SYNC_MONITOR=1`
+- `OEC_DC_SYNC_MAX_PHASE_ERROR_NS=<ns>`
+- `OEC_DC_SYNC_LOCK_ACQUIRE_CYCLES=<N>`
+- `OEC_DC_SYNC_MAX_OOW_CYCLES=<N>`
+- `OEC_DC_SYNC_HISTORY_WINDOW=<N>`
+- `OEC_DC_SYNC_ACTION=warn|degrade|recover`
+- `OEC_TRACE_DC=1`
+
+### 8.8 KPI interpretation for acceptance
+
+Use `dc_soak_demo` and monitor:
+
+- `runtime_p99_us`: scheduler and runtime health,
+- `wake_jitter_p99_ns`: host wakeup quality,
+- `dc_jitter_p99_ns`: DC phase stability,
+- `lock_duty`: fraction of cycles in locked state,
+- `dc_policy_triggers`: supervision action frequency.
+
+You want stable low tails and near-continuous lock in target operating conditions.
+
+### 8.9 Relevant demos
+
+- `dc_hardware_sync_demo`: low-level DC register/control behavior.
+- `dc_soak_demo`: long-run KPI collection with JSON output.
+- `beckhoff_io_demo` + `OEC_TRACE_DC_QUALITY=1`: integrated cyclic path view.
 
 ---
 

@@ -236,6 +236,39 @@ Debug visibility knobs:
 - `OEC_TRACE_DC_QUALITY=1`: emit periodic DC quality snapshots in `beckhoff_io_demo`.
 - `OEC_DC_QUALITY_JSON=1`: format `beckhoff_io_demo` DC quality snapshots as JSON lines.
 
+### 9.1 Deeper DC interpretation notes
+
+Control-side model used by this stack:
+
+- phase error: `e = referenceTimeNs - localTimeNs`
+- filtered error (`filterAlpha`)
+- PI output (`kp`, `ki`)
+- clamp + slew-limited applied correction
+
+Read this as a control loop:
+
+- `kp` increases response speed,
+- `ki` removes steady-state offset but can destabilize if too high,
+- clamp/slew limits prevent large step changes.
+
+Common tuning symptoms:
+
+- oscillation/chatter: gains too aggressive.
+- slow lock acquisition: gains too low.
+- frequent policy triggers with healthy wiring: threshold too strict or unstable tuning.
+
+Practical KPI targets are system-specific, but acceptance should track:
+
+- lock duty cycle,
+- phase error tails,
+- `dc_jitter_p99_ns`,
+- policy trigger frequency over long soak windows.
+
+Scope note:
+
+- Current DC path is a strong practical prototype (register read/write + closed-loop quality supervision).
+- Full production-grade Sync0/Sync1 phase control with explicit NIC/timebase coupling is still a roadmap hardening item.
+
 ## 10) Topology and redundancy policy terms
 
 Additional runtime terms used in phase-3 tooling:
