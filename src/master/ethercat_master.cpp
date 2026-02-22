@@ -163,6 +163,9 @@ bool EthercatMaster::configure(const NetworkConfiguration& config) {
     missingPolicyLatched_ = false;
     hotConnectPolicyLatched_ = false;
     redundancyPolicyLatched_ = false;
+    redundancyStatus_ = RedundancyStatusSnapshot{};
+    redundancyKpis_ = RedundancyKpiSnapshot{};
+    redundancyFaultActive_ = false;
     dcTraceCounter_ = 0;
 
     // Validate before binding signals to avoid partially configured runtime state.
@@ -205,6 +208,10 @@ bool EthercatMaster::start() {
     }
     configureDcClosedLoopFromEnvironment();
     configureTopologyRecoveryFromEnvironment();
+    redundancyStatus_ = RedundancyStatusSnapshot{};
+    redundancyStatus_.state = RedundancyState::PrimaryOnly;
+    redundancyKpis_ = RedundancyKpiSnapshot{};
+    redundancyFaultActive_ = false;
 
     // Optionally drive a full AL startup ladder so cyclic exchange starts from OP.
     if (stateMachineOptions_.enable) {
@@ -270,6 +277,10 @@ bool EthercatMaster::runCycle() {
         }
         processImage_.inputBytes() = rx;
         statistics_.lastWorkingCounter = transport_.lastWorkingCounter();
+        if (redundancyStatus_.state == RedundancyState::RedundancyDegraded ||
+            redundancyStatus_.state == RedundancyState::Recovering) {
+            ++redundancyKpis_.impactedCycles;
+        }
         if (!runDcClosedLoopUpdate()) {
             ++statistics_.cyclesFailed;
             ++statistics_.cyclesTotal;
@@ -557,10 +568,17 @@ bool EthercatMaster::refreshTopology(std::string& outError) {
     if (!topologyManager_.refresh(outError)) {
         return false;
     }
+    const auto changes = topologyManager_.changeSet();
+    redundancyStatus_.redundancyHealthy = changes.redundancyHealthy;
+    if (!topologyRecoveryOptions_.enable) {
+        transitionRedundancyState(changes.redundancyHealthy ? RedundancyState::RedundantHealthy
+                                                            : RedundancyState::RedundancyDegraded,
+                                  changes.redundancyHealthy ? "redundancy healthy (policy disabled)"
+                                                            : "redundancy degraded (policy disabled)");
+    }
     if (topologyRecoveryOptions_.enable) {
         const auto missing = topologyManager_.detectMissing(config_.slaves);
         const auto hotConnected = topologyManager_.detectHotConnected(config_.slaves);
-        const auto changes = topologyManager_.changeSet();
         applyTopologyPolicyIfNeeded(missing, hotConnected, changes.redundancyHealthy, changes.generation);
     }
     return true;
@@ -616,6 +634,16 @@ CycleStatistics EthercatMaster::statistics() const {
 std::string EthercatMaster::lastError() const {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
     return error_;
+}
+
+EthercatMaster::RedundancyStatusSnapshot EthercatMaster::redundancyStatus() const {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    return redundancyStatus_;
+}
+
+EthercatMaster::RedundancyKpiSnapshot EthercatMaster::redundancyKpis() const {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    return redundancyKpis_;
 }
 
 void EthercatMaster::setError(std::string message) { error_ = std::move(message); }
@@ -701,6 +729,10 @@ void EthercatMaster::configureTopologyRecoveryFromEnvironment() {
     missingPolicyLatched_ = false;
     hotConnectPolicyLatched_ = false;
     redundancyPolicyLatched_ = false;
+    redundancyStatus_ = RedundancyStatusSnapshot{};
+    redundancyStatus_.state = RedundancyState::PrimaryOnly;
+    redundancyKpis_ = RedundancyKpiSnapshot{};
+    redundancyFaultActive_ = false;
 }
 
 RecoveryAction EthercatMaster::mapTopologyActionToRecoveryAction(TopologyPolicyAction action) const {
@@ -722,6 +754,7 @@ void EthercatMaster::applyTopologyPolicyIfNeeded(const std::vector<SlaveIdentity
                                                  const std::vector<SlaveIdentity>& hotConnected,
                                                  bool redundancyHealthy,
                                                  std::uint64_t topologyGeneration) {
+    redundancyStatus_.redundancyHealthy = redundancyHealthy;
     const bool hasMissing = !missing.empty();
     const bool hasHotConnected = !hotConnected.empty();
     const bool redundancyDown = !redundancyHealthy;
@@ -738,6 +771,19 @@ void EthercatMaster::applyTopologyPolicyIfNeeded(const std::vector<SlaveIdentity
     }
     if (!redundancyDown) {
         redundancyPolicyLatched_ = false;
+    }
+
+    if (redundancyDown && !redundancyFaultActive_) {
+        redundancyFaultActive_ = true;
+        redundancyFaultStart_ = std::chrono::steady_clock::now();
+        ++redundancyKpis_.degradeEvents;
+        transitionRedundancyState(RedundancyState::RedundancyDegraded, "redundancy down detected");
+        redundancyKpis_.lastDetectionLatencyMs = 0;
+    } else if (!redundancyDown && redundancyFaultActive_) {
+        redundancyFaultActive_ = false;
+        redundancyRecoveryStart_ = std::chrono::steady_clock::now();
+        ++redundancyKpis_.recoverEvents;
+        transitionRedundancyState(RedundancyState::Recovering, "redundancy link restored");
     }
 
     auto emitEvent = [&](std::uint16_t slavePosition,
@@ -832,6 +878,12 @@ void EthercatMaster::applyTopologyPolicyIfNeeded(const std::vector<SlaveIdentity
     if (redundancyDown &&
         !redundancyPolicyLatched_ &&
         redundancyConditionCycles_ >= topologyRecoveryOptions_.redundancyGraceCycles) {
+        if (redundancyKpis_.lastDetectionLatencyMs < 0) {
+            const auto now = std::chrono::steady_clock::now();
+            redundancyKpis_.lastDetectionLatencyMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                now - redundancyFaultStart_).count();
+        }
+        redundancyKpis_.lastPolicyTriggerLatencyMs = redundancyKpis_.lastDetectionLatencyMs;
         switch (topologyRecoveryOptions_.redundancyAction) {
         case TopologyPolicyAction::Monitor:
             emitEvent(0U, topologyRecoveryOptions_.redundancyAction, true, "redundancy-down monitor");
@@ -862,6 +914,23 @@ void EthercatMaster::applyTopologyPolicyIfNeeded(const std::vector<SlaveIdentity
         }
         redundancyPolicyLatched_ = true;
     }
+
+    if (!redundancyDown && redundancyStatus_.state == RedundancyState::Recovering) {
+        const auto now = std::chrono::steady_clock::now();
+        redundancyKpis_.lastRecoveryLatencyMs =
+            std::chrono::duration_cast<std::chrono::milliseconds>(now - redundancyRecoveryStart_).count();
+        transitionRedundancyState(RedundancyState::RedundantHealthy, "redundancy healthy");
+    }
+}
+
+void EthercatMaster::transitionRedundancyState(RedundancyState newState, const std::string& reason) {
+    if (redundancyStatus_.state == newState) {
+        redundancyStatus_.lastReason = reason;
+        return;
+    }
+    redundancyStatus_.state = newState;
+    redundancyStatus_.lastReason = reason;
+    ++redundancyStatus_.transitionCount;
 }
 
 bool EthercatMaster::runDcClosedLoopUpdate() {

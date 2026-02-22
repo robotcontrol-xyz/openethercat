@@ -249,6 +249,59 @@ int main() {
         assert(!master.runCycle());
     }
 
+    // Redundancy policy execution tracks degrade/recover state and KPI latencies.
+    {
+        oec::NetworkConfiguration cfg;
+        cfg.processImageInputBytes = 1;
+        cfg.processImageOutputBytes = 1;
+        cfg.slaves = {
+            {.name = "EK1100", .alias = 0, .position = 0, .vendorId = 0x00000002, .productCode = 0x044c2c52},
+        };
+        cfg.signals = {
+            {.logicalName = "InputA", .direction = oec::SignalDirection::Input, .slaveName = "EK1100", .byteOffset = 0, .bitOffset = 0},
+        };
+
+        oec::MockTransport transport(1, 1);
+        oec::EthercatMaster master(transport);
+        assert(master.configure(cfg));
+        auto stateOptions = oec::EthercatMaster::StateMachineOptions{};
+        stateOptions.enable = false;
+        master.setStateMachineOptions(stateOptions);
+        auto topoOptions = oec::EthercatMaster::TopologyRecoveryOptions{};
+        topoOptions.enable = true;
+        topoOptions.missingSlaveAction = oec::EthercatMaster::TopologyPolicyAction::Monitor;
+        topoOptions.hotConnectAction = oec::EthercatMaster::TopologyPolicyAction::Monitor;
+        topoOptions.redundancyGraceCycles = 1U;
+        topoOptions.redundancyAction = oec::EthercatMaster::TopologyPolicyAction::Monitor;
+        master.setTopologyRecoveryOptions(topoOptions);
+        assert(master.start());
+
+        transport.setDiscoveredSlaves({
+            {.position = 0, .vendorId = 0x00000002, .productCode = 0x044c2c52, .online = true},
+        });
+        transport.setRedundancyHealthy(false);
+        std::string topoError;
+        assert(master.refreshTopology(topoError));
+        const auto s1 = master.redundancyStatus();
+        assert(!s1.redundancyHealthy);
+        assert(s1.state == oec::EthercatMaster::RedundancyState::RedundancyDegraded);
+
+        transport.setRedundancyHealthy(true);
+        assert(master.refreshTopology(topoError));
+        const auto s2 = master.redundancyStatus();
+        assert(s2.redundancyHealthy);
+        assert(s2.state == oec::EthercatMaster::RedundancyState::RedundantHealthy);
+
+        const auto kpi = master.redundancyKpis();
+        assert(kpi.degradeEvents >= 1U);
+        assert(kpi.recoverEvents >= 1U);
+        assert(kpi.lastDetectionLatencyMs >= 0);
+        assert(kpi.lastRecoveryLatencyMs >= 0);
+        assert(kpi.lastPolicyTriggerLatencyMs >= 0);
+
+        master.stop();
+    }
+
     std::cout << "production_hardening_tests passed\n";
     return 0;
 }

@@ -41,6 +41,16 @@ class LinuxRawSocketTransport;
 class EthercatMaster {
 public:
     /**
+     * @brief High-level redundancy state for topology/recovery supervision.
+     */
+    enum class RedundancyState {
+        PrimaryOnly,
+        RedundantHealthy,
+        RedundancyDegraded,
+        Recovering
+    };
+
+    /**
      * @brief Topology-policy actions for phase-3 fault handling.
      */
     enum class TopologyPolicyAction {
@@ -132,6 +142,28 @@ public:
         RecoveryAction action = RecoveryAction::None;
         bool success = false;
         std::string message;
+    };
+
+    /**
+     * @brief Runtime redundancy status snapshot.
+     */
+    struct RedundancyStatusSnapshot {
+        RedundancyState state = RedundancyState::PrimaryOnly;
+        bool redundancyHealthy = true;
+        std::uint64_t transitionCount = 0;
+        std::string lastReason;
+    };
+
+    /**
+     * @brief Redundancy switchover KPI counters/latencies.
+     */
+    struct RedundancyKpiSnapshot {
+        std::uint64_t degradeEvents = 0;
+        std::uint64_t recoverEvents = 0;
+        std::uint64_t impactedCycles = 0;
+        std::int64_t lastDetectionLatencyMs = -1;
+        std::int64_t lastRecoveryLatencyMs = -1;
+        std::int64_t lastPolicyTriggerLatencyMs = -1;
     };
 
     explicit EthercatMaster(ITransport& transport);
@@ -251,6 +283,8 @@ public:
     CycleStatistics statistics() const;
 
     std::string lastError() const;
+    RedundancyStatusSnapshot redundancyStatus() const;
+    RedundancyKpiSnapshot redundancyKpis() const;
 
 private:
     struct DcClosedLoopOptions {
@@ -268,6 +302,7 @@ private:
                                      const std::vector<SlaveIdentity>& hotConnected,
                                      bool redundancyHealthy,
                                      std::uint64_t topologyGeneration);
+    void transitionRedundancyState(RedundancyState newState, const std::string& reason);
     void updateDcSyncQualityLocked(std::int64_t phaseErrorNs);
     void applyDcPolicyLocked();
     void configureDcClosedLoopFromEnvironment();
@@ -312,6 +347,11 @@ private:
     bool missingPolicyLatched_ = false;
     bool hotConnectPolicyLatched_ = false;
     bool redundancyPolicyLatched_ = false;
+    RedundancyStatusSnapshot redundancyStatus_{};
+    RedundancyKpiSnapshot redundancyKpis_{};
+    std::chrono::steady_clock::time_point redundancyFaultStart_{};
+    std::chrono::steady_clock::time_point redundancyRecoveryStart_{};
+    bool redundancyFaultActive_ = false;
     bool degraded_ = false;
     std::string error_;
 };

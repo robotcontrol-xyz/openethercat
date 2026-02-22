@@ -139,6 +139,9 @@ sudo ./build/physical_topology_scan_demo linux:eth0
 OEC_TOPOLOGY_POLICY_ENABLE=1 OEC_TOPOLOGY_MISSING_GRACE=1 \
 OEC_TOPOLOGY_MISSING_ACTION=degrade \
   sudo ./build/physical_topology_scan_demo linux:eth0
+# Redundancy policy controls:
+# OEC_TOPOLOGY_REDUNDANCY_GRACE=<cycles>
+# OEC_TOPOLOGY_REDUNDANCY_ACTION=monitor|retry|reconfigure|degrade|failstop
 ```
 
 Physical I/O troubleshooting (mapping + WKC + output RAM readback):

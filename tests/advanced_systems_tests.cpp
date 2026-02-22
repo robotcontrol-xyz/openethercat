@@ -155,6 +155,9 @@ int main() {
         assert(c1.changed);
         assert(c1.added.size() == 2U);
         assert(c1.removed.empty());
+        const auto r1 = master.redundancyStatus();
+        assert(!r1.redundancyHealthy);
+        assert(r1.state == oec::EthercatMaster::RedundancyState::RedundancyDegraded);
         const auto missing = master.missingSlaves();
         const auto hot = master.hotConnectedSlaves();
         assert(missing.size() == 1);
@@ -179,6 +182,12 @@ int main() {
         assert(c2.removed.empty());
         assert(c2.updated.empty());
         assert(master.topologyGeneration() == 2U);
+        const auto r2 = master.redundancyStatus();
+        assert(r2.redundancyHealthy);
+        assert(r2.state == oec::EthercatMaster::RedundancyState::RedundantHealthy);
+        assert(r2.transitionCount >= 1U);
+        const auto rk = master.redundancyKpis();
+        assert(rk.degradeEvents == 0U); // policy disabled in this test path.
 
         master.stop();
     }
