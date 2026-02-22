@@ -8,12 +8,14 @@
 #include <cstdint>
 #include <cstring>
 #include <iostream>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
 
 #include "openethercat/master/ethercat_master.hpp"
 #include "openethercat/transport/mock_transport.hpp"
+#include "openethercat/transport/transport_factory.hpp"
 
 namespace {
 
@@ -217,7 +219,12 @@ public:
 
 } // namespace
 
-int main() {
+int main(int argc, char** argv) {
+    // Two independent transport specs (strand A / strand B), defaults to mock.
+    const std::string transportSpecA = (argc > 1) ? argv[1] : "mock";
+    const std::string transportSpecB = (argc > 2) ? argv[2] : "mock";
+    const int cycles = (argc > 3) ? std::max(1, std::stoi(argv[3])) : 16;
+
     // Build two mirrored masters representing both sides of an EL6692 bridge pair.
     oec::NetworkConfiguration cfgA;
     cfgA.processImageInputBytes = kProcessBytes;
@@ -236,22 +243,51 @@ int main() {
     cfgB.signals[0].logicalName = "BridgeAliveB";
     cfgB.signals[0].slaveName = "EL6692_B";
 
-    oec::MockTransport ta(kProcessBytes, kProcessBytes);
-    oec::MockTransport tb(kProcessBytes, kProcessBytes);
-    oec::EthercatMaster ma(ta);
-    oec::EthercatMaster mb(tb);
+    std::string error;
+    oec::TransportFactoryConfig cfgTransportA;
+    cfgTransportA.mockInputBytes = kProcessBytes;
+    cfgTransportA.mockOutputBytes = kProcessBytes;
+    if (!oec::TransportFactory::parseTransportSpec(transportSpecA, cfgTransportA, error)) {
+        std::cerr << "Invalid strand A transport spec: " << error << '\n';
+        return 1;
+    }
+    oec::TransportFactoryConfig cfgTransportB;
+    cfgTransportB.mockInputBytes = kProcessBytes;
+    cfgTransportB.mockOutputBytes = kProcessBytes;
+    if (!oec::TransportFactory::parseTransportSpec(transportSpecB, cfgTransportB, error)) {
+        std::cerr << "Invalid strand B transport spec: " << error << '\n';
+        return 1;
+    }
+    auto ta = oec::TransportFactory::create(cfgTransportA, error);
+    if (!ta) {
+        std::cerr << "Failed to create strand A transport: " << error << '\n';
+        return 1;
+    }
+    auto tb = oec::TransportFactory::create(cfgTransportB, error);
+    if (!tb) {
+        std::cerr << "Failed to create strand B transport: " << error << '\n';
+        return 1;
+    }
+    oec::EthercatMaster ma(*ta);
+    oec::EthercatMaster mb(*tb);
 
     if (!ma.configure(cfgA) || !mb.configure(cfgB) || !ma.start() || !mb.start()) {
         std::cerr << "startup failed\n";
         return 1;
     }
 
+    auto* mockA = dynamic_cast<oec::MockTransport*>(ta.get());
+    auto* mockB = dynamic_cast<oec::MockTransport*>(tb.get());
+    const bool simulateBridge = (mockA != nullptr && mockB != nullptr);
+
     BridgeEndpoint epA("A");
     BridgeEndpoint epB("B");
     BridgeWire wire;
 
-    std::cout << "EL6692 structured bridge demo running\n";
-    for (int cycle = 1; cycle <= 16; ++cycle) {
+    std::cout << "EL6692 structured bridge demo running (A=" << transportSpecA
+              << ", B=" << transportSpecB
+              << ", simulated_bridge=" << (simulateBridge ? "yes" : "no") << ")\n";
+    for (int cycle = 1; cycle <= cycles; ++cycle) {
         // Inject one command from A; endpoint logic handles retries/acks automatically.
         if (cycle == 2) {
             epA.requestCommand(0x31, {0x10, 0x20, 0x30, 0x40}, cycle);
@@ -267,10 +303,14 @@ int main() {
         mb.runCycle();
 
         // Bridge wire copies process-image frames and injects temporary link loss B->A.
-        wire.transfer(cycle, ta, tb);
+        if (simulateBridge) {
+            wire.transfer(cycle, *mockA, *mockB);
+        }
 
-        ma.runCycle();
-        mb.runCycle();
+        if (simulateBridge) {
+            ma.runCycle();
+            mb.runCycle();
+        }
 
         std::vector<std::uint8_t> inA;
         std::vector<std::uint8_t> inB;

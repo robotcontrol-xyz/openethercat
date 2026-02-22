@@ -3,13 +3,17 @@
  * @brief openEtherCAT source file.
  */
 
+#include <algorithm>
 #include <cstdint>
 #include <cstring>
 #include <iostream>
+#include <memory>
+#include <string>
 #include <vector>
 
 #include "openethercat/master/ethercat_master.hpp"
 #include "openethercat/transport/mock_transport.hpp"
+#include "openethercat/transport/transport_factory.hpp"
 
 namespace {
 
@@ -71,7 +75,12 @@ public:
 
 } // namespace
 
-int main() {
+int main(int argc, char** argv) {
+    // Two independent transport specs (strand A / strand B), defaults to mock for both.
+    const std::string transportSpecA = (argc > 1) ? argv[1] : "mock";
+    const std::string transportSpecB = (argc > 2) ? argv[2] : "mock";
+    const int cycles = (argc > 3) ? std::max(1, std::stoi(argv[3])) : 12;
+
     // Two EtherCAT strands connected through EL6692 bridge terminals.
     oec::NetworkConfiguration strandA;
     strandA.processImageInputBytes = kProcessBytes;
@@ -90,16 +99,45 @@ int main() {
     strandB.signals[0].logicalName = "BridgeAliveB";
     strandB.signals[0].slaveName = "EL6692_B";
 
-    oec::MockTransport transportA(kProcessBytes, kProcessBytes);
-    oec::MockTransport transportB(kProcessBytes, kProcessBytes);
-    oec::EthercatMaster masterA(transportA);
-    oec::EthercatMaster masterB(transportB);
+    std::string error;
+    oec::TransportFactoryConfig cfgTransportA;
+    cfgTransportA.mockInputBytes = kProcessBytes;
+    cfgTransportA.mockOutputBytes = kProcessBytes;
+    if (!oec::TransportFactory::parseTransportSpec(transportSpecA, cfgTransportA, error)) {
+        std::cerr << "Invalid strand A transport spec: " << error << '\n';
+        return 1;
+    }
+    oec::TransportFactoryConfig cfgTransportB;
+    cfgTransportB.mockInputBytes = kProcessBytes;
+    cfgTransportB.mockOutputBytes = kProcessBytes;
+    if (!oec::TransportFactory::parseTransportSpec(transportSpecB, cfgTransportB, error)) {
+        std::cerr << "Invalid strand B transport spec: " << error << '\n';
+        return 1;
+    }
+
+    auto transportA = oec::TransportFactory::create(cfgTransportA, error);
+    if (!transportA) {
+        std::cerr << "Failed to create strand A transport: " << error << '\n';
+        return 1;
+    }
+    auto transportB = oec::TransportFactory::create(cfgTransportB, error);
+    if (!transportB) {
+        std::cerr << "Failed to create strand B transport: " << error << '\n';
+        return 1;
+    }
+
+    oec::EthercatMaster masterA(*transportA);
+    oec::EthercatMaster masterB(*transportB);
 
     if (!masterA.configure(strandA) || !masterB.configure(strandB) ||
         !masterA.start() || !masterB.start()) {
         std::cerr << "Startup failed\n";
         return 1;
     }
+
+    auto* mockA = dynamic_cast<oec::MockTransport*>(transportA.get());
+    auto* mockB = dynamic_cast<oec::MockTransport*>(transportB.get());
+    const bool simulateBridge = (mockA != nullptr && mockB != nullptr);
 
     El6692BridgeSimulator bridge;
 
@@ -109,10 +147,14 @@ int main() {
     masterB.writeOutputBytes(kBridgeTxOffset, initPayload);
     masterA.runCycle();
     masterB.runCycle();
-    bridge.transfer(transportA, transportB);
+    if (simulateBridge) {
+        bridge.transfer(*mockA, *mockB);
+    }
 
-    std::cout << "EL6692 bridge demo running\n";
-    for (std::uint16_t cycle = 1; cycle <= 12; ++cycle) {
+    std::cout << "EL6692 bridge demo running (A=" << transportSpecA
+              << ", B=" << transportSpecB
+              << ", simulated_bridge=" << (simulateBridge ? "yes" : "no") << ")\n";
+    for (int cycle = 1; cycle <= cycles; ++cycle) {
         // Compose independent payloads from strand A and B.
         const auto aPayload = packBridgePayload(cycle, static_cast<std::int32_t>(cycle * 100), 0xA1);
         const auto bPayload = packBridgePayload(cycle, static_cast<std::int32_t>(-static_cast<int>(cycle) * 50), 0xB2);
@@ -126,11 +168,15 @@ int main() {
         }
 
         // Simulate bridge forwarding by copying each side TX image into the opposite RX image.
-        bridge.transfer(transportA, transportB);
+        if (simulateBridge) {
+            bridge.transfer(*mockA, *mockB);
+        }
 
-        // Next cycle reads bridged data into input image.
-        masterA.runCycle();
-        masterB.runCycle();
+        // In simulation, run one extra cycle after wire transfer to consume bridged RX data.
+        if (simulateBridge) {
+            masterA.runCycle();
+            masterB.runCycle();
+        }
 
         std::vector<std::uint8_t> aRx;
         std::vector<std::uint8_t> bRx;
