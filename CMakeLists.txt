@@ -93,6 +93,9 @@ if(OEC_BUILD_EXAMPLES)
 
     add_executable(mailbox_soak_demo examples/mailbox_soak_demo.cpp)
     target_link_libraries(mailbox_soak_demo PRIVATE openethercat)
+
+    add_executable(dc_hardware_sync_demo examples/dc_hardware_sync_demo.cpp)
+    target_link_libraries(dc_hardware_sync_demo PRIVATE openethercat)
 endif()
 
 if(OEC_BUILD_TESTS)

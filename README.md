@@ -28,6 +28,7 @@ This repository provides:
 - Mailbox error taxonomy diagnostics: timeout/busy/parse/stale/abort/transport-IO class counters.
 - FoE/EoE service APIs (read/write file, send/receive encapsulated Ethernet frame).
 - Distributed clock sync controller with filtered offset, PI correction, and jitter stats.
+- Linux transport DC hardware prototype: per-slave DC system-time sampling and DC offset register writes.
 - Topology manager with hot-connect/missing detection and redundancy health checks.
 - Mock HIL soak harness for repeated fault-injection and recovery validation.
 - Example app for Beckhoff EK1100 + EL1004 + EL2004 style topology.
@@ -80,6 +81,7 @@ Artifacts are emitted in `build/` as `.deb` files, one for each component.
 ./build/el6751_can_bridge_demo
 ./build/physical_topology_scan_demo linux:eth0
 ./build/mailbox_soak_demo linux:eth0 1 0x1018 0x01 1000
+./build/dc_hardware_sync_demo linux:eth0 1 500 10
 # JSON-lines mode for CI ingestion:
 OEC_SOAK_JSON=1 ./build/mailbox_soak_demo linux:eth0 1 0x1018 0x01 1000
 ```

@@ -47,6 +47,8 @@ constexpr std::uint8_t kCommandApwr = 0x02;
 constexpr std::uint16_t kRegisterAlControl = 0x0120;
 constexpr std::uint16_t kRegisterAlStatus = 0x0130;
 constexpr std::uint16_t kRegisterAlStatusCode = 0x0134;
+constexpr std::uint16_t kRegisterDcSystemTime = 0x0910;
+constexpr std::uint16_t kRegisterDcSystemTimeOffset = 0x0920;
 constexpr std::uint16_t kRegisterEscType = 0x0008;
 constexpr std::uint16_t kRegisterEscRevision = 0x000A;
 constexpr std::uint16_t kRegisterSmBase = 0x0800;
@@ -215,6 +217,21 @@ void sleepMailboxBackoff(int attempt, int baseDelayMs, int maxDelayMs) {
     const auto shift = std::min(attempt, 10);
     const auto delay = std::min(maxDelayMs, baseDelayMs << shift);
     std::this_thread::sleep_for(std::chrono::milliseconds(std::max(1, delay)));
+}
+
+std::int64_t readLe64Signed(const std::vector<std::uint8_t>& data, std::size_t offset) {
+    std::uint64_t v = 0U;
+    for (std::size_t i = 0; i < 8U; ++i) {
+        v |= (static_cast<std::uint64_t>(data[offset + i]) << (8U * i));
+    }
+    return static_cast<std::int64_t>(v);
+}
+
+void writeLe64Signed(std::vector<std::uint8_t>& out, std::int64_t value) {
+    const auto u = static_cast<std::uint64_t>(value);
+    for (std::size_t i = 0; i < 8U; ++i) {
+        out.push_back(static_cast<std::uint8_t>((u >> (8U * i)) & 0xFFU));
+    }
 }
 
 bool sendAndReceiveDatagram(
@@ -702,6 +719,71 @@ bool LinuxRawSocketTransport::readSlaveAlStatusCode(std::uint16_t position, std:
     outCode = static_cast<std::uint16_t>(
         static_cast<std::uint16_t>(payload[0]) |
         (static_cast<std::uint16_t>(payload[1]) << 8U));
+    lastWorkingCounter_ = wkc;
+    return true;
+}
+
+bool LinuxRawSocketTransport::readDcSystemTime(std::uint16_t slavePosition,
+                                               std::int64_t& outSlaveTimeNs,
+                                               std::string& outError) {
+    outError.clear();
+    if (socketFd_ < 0) {
+        outError = "transport not open";
+        return false;
+    }
+
+    const auto currentIndex = datagramIndex_++;
+    EthercatDatagramRequest request;
+    request.command = kCommandAprd;
+    request.datagramIndex = currentIndex;
+    request.adp = toAutoIncrementAddress(slavePosition);
+    request.ado = kRegisterDcSystemTime;
+    request.payload.assign(8U, 0U);
+
+    std::uint16_t wkc = 0;
+    std::vector<std::uint8_t> payload;
+    if (!sendAndReceiveDatagram(socketFd_, ifIndex_, timeoutMs_, maxFramesPerCycle_,
+                                expectedWorkingCounter_, destinationMac_, sourceMac_,
+                                request, wkc, payload, outError)) {
+        return false;
+    }
+    if (payload.size() < 8U) {
+        outError = "DC system time payload too short";
+        return false;
+    }
+
+    outSlaveTimeNs = readLe64Signed(payload, 0U);
+    lastWorkingCounter_ = wkc;
+    return true;
+}
+
+bool LinuxRawSocketTransport::writeDcSystemTimeOffset(std::uint16_t slavePosition,
+                                                      std::int64_t offsetNs,
+                                                      std::string& outError) {
+    outError.clear();
+    if (socketFd_ < 0) {
+        outError = "transport not open";
+        return false;
+    }
+
+    const auto currentIndex = datagramIndex_++;
+    EthercatDatagramRequest request;
+    request.command = kCommandApwr;
+    request.datagramIndex = currentIndex;
+    request.adp = toAutoIncrementAddress(slavePosition);
+    request.ado = kRegisterDcSystemTimeOffset;
+    request.payload.clear();
+    request.payload.reserve(8U);
+    writeLe64Signed(request.payload, offsetNs);
+
+    std::uint16_t wkc = 0;
+    std::vector<std::uint8_t> payload;
+    if (!sendAndReceiveDatagram(socketFd_, ifIndex_, timeoutMs_, maxFramesPerCycle_,
+                                expectedWorkingCounter_, destinationMac_, sourceMac_,
+                                request, wkc, payload, outError)) {
+        return false;
+    }
+
     lastWorkingCounter_ = wkc;
     return true;
 }

@@ -110,6 +110,8 @@ public:
                  std::string& outError) override;
     bool eoeReceive(std::uint16_t slavePosition, std::vector<std::uint8_t>& frame,
                     std::string& outError) override;
+    bool readDcSystemTime(std::uint16_t slavePosition, std::int64_t& outSlaveTimeNs, std::string& outError);
+    bool writeDcSystemTimeOffset(std::uint16_t slavePosition, std::int64_t offsetNs, std::string& outError);
 
     std::string lastError() const override;
     std::uint16_t lastWorkingCounter() const override;

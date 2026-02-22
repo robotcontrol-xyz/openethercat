@@ -48,7 +48,7 @@ Status: Complete.
 
 ## Phase 2: Distributed clocks and deterministic runtime
 
-Status: Not started.
+Status: In progress (hardware prototype started).
 
 ### Scope
 
