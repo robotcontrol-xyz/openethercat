@@ -59,6 +59,8 @@ public:
     virtual std::string lastError() const = 0;
 
     virtual std::uint16_t lastWorkingCounter() const { return 0U; }
+    virtual std::uint16_t lastOutputWorkingCounter() const { return 0U; }
+    virtual std::uint16_t lastInputWorkingCounter() const { return 0U; }
 
     virtual bool requestNetworkState(SlaveState) { return false; }
     virtual bool readNetworkState(SlaveState&) { return false; }

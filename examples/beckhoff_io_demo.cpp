@@ -14,6 +14,7 @@
 
 #include "openethercat/config/config_loader.hpp"
 #include "openethercat/master/ethercat_master.hpp"
+#include "openethercat/transport/linux_raw_socket_transport.hpp"
 #include "openethercat/transport/mock_transport.hpp"
 #include "openethercat/transport/transport_factory.hpp"
 
@@ -126,6 +127,7 @@ int main(int argc, char** argv) {
     }
 
     auto* mock = dynamic_cast<oec::MockTransport*>(transport.get());
+    auto* linuxTransport = dynamic_cast<oec::LinuxRawSocketTransport*>(transport.get());
     if (mock) {
         std::cout << "Simulating EL1004 input toggles and controlling EL2004 output on channel "
                   << selectedChannel << ". Press Ctrl-C to stop.\n";
@@ -213,7 +215,11 @@ int main(int argc, char** argv) {
                 bool observedInput = false;
                 const bool haveInput = master.getInputByName("StartButton", observedInput);
                 std::cout << "[cycle-debug] cycle=" << cycle
-                          << " wkc=" << master.lastWorkingCounter()
+                          << " wkc_lrd=" << master.lastWorkingCounter()
+                          << " wkc_lwr=" << (linuxTransport ? linuxTransport->lastOutputWorkingCounter() : 0U)
+                          << " wkc_sum="
+                          << static_cast<unsigned>(master.lastWorkingCounter() +
+                                                   (linuxTransport ? linuxTransport->lastOutputWorkingCounter() : 0U))
                           << " input=" << (haveInput ? (observedInput ? "ON" : "OFF") : "n/a")
                           << " output_cmd=" << (driveOutput ? "ON" : "OFF")
                           << '\n';

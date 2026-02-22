@@ -367,6 +367,8 @@ bool LinuxRawSocketTransport::open() {
         }
     }
     lastWorkingCounter_ = 0;
+    lastOutputWorkingCounter_ = 0;
+    lastInputWorkingCounter_ = 0;
     lastMailboxErrorClass_ = MailboxErrorClass::None;
     dcDiagnostics_ = DcDiagnostics{};
     if (!openEthercatInterfaceSocket(ifname_, socketFd_, ifIndex_, sourceMac_, error_)) {
@@ -399,6 +401,8 @@ void LinuxRawSocketTransport::close() {
     }
     secondaryIfIndex_ = 0;
     lastWorkingCounter_ = 0;
+    lastOutputWorkingCounter_ = 0;
+    lastInputWorkingCounter_ = 0;
     lastFrameUsedSecondary_ = false;
     outputWindows_.clear();
     while (!emergencies_.empty()) {
@@ -449,6 +453,8 @@ bool LinuxRawSocketTransport::exchange(const std::vector<std::uint8_t>& txProces
 
     std::uint16_t lwrWkc = 0;
     std::uint16_t lrdWkc = 0;
+    lastOutputWorkingCounter_ = 0;
+    lastInputWorkingCounter_ = 0;
     std::vector<std::uint8_t> lwrAck;
     std::vector<std::uint8_t> lrdPayload;
 
@@ -468,6 +474,7 @@ bool LinuxRawSocketTransport::exchange(const std::vector<std::uint8_t>& txProces
     if (traceWkc) {
         std::cerr << "[oec] " << commandName(lwr.command) << " wkc=" << lwrWkc << '\n';
     }
+    lastOutputWorkingCounter_ = lwrWkc;
 
     EthercatDatagramRequest lrd;
     lrd.command = kCommandLrd;
@@ -485,6 +492,7 @@ bool LinuxRawSocketTransport::exchange(const std::vector<std::uint8_t>& txProces
     if (traceWkc) {
         std::cerr << "[oec] " << commandName(lrd.command) << " wkc=" << lrdWkc << '\n';
     }
+    lastInputWorkingCounter_ = lrdWkc;
 
     // Optional field-debug path: confirm written outputs by reading mapped SM2 process RAM.
     const bool traceOutputVerify = (std::getenv("OEC_TRACE_OUTPUT_VERIFY") != nullptr);
@@ -2259,6 +2267,8 @@ bool LinuxRawSocketTransport::eoeReceive(std::uint16_t slavePosition, std::vecto
 
 std::string LinuxRawSocketTransport::lastError() const { return error_; }
 std::uint16_t LinuxRawSocketTransport::lastWorkingCounter() const { return lastWorkingCounter_; }
+std::uint16_t LinuxRawSocketTransport::lastOutputWorkingCounter() const { return lastOutputWorkingCounter_; }
+std::uint16_t LinuxRawSocketTransport::lastInputWorkingCounter() const { return lastInputWorkingCounter_; }
 MailboxDiagnostics LinuxRawSocketTransport::mailboxDiagnostics() const { return mailboxDiagnostics_; }
 void LinuxRawSocketTransport::resetMailboxDiagnostics() {
     mailboxDiagnostics_ = MailboxDiagnostics{};

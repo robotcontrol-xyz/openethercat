@@ -125,6 +125,11 @@ Example:
 [oec] LRD wkc=1
 ```
 
+`beckhoff_io_demo` cycle debug in Linux mode now prints:
+- `wkc_lwr`: output datagram WKC
+- `wkc_lrd`: input datagram WKC
+- `wkc_sum`: simple sum of both per-cycle datagrams
+
 For one output slave and one input slave, this is often expected.
 
 Common WKC interpretations:

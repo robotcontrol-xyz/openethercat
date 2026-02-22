@@ -129,6 +129,8 @@ public:
 
     std::string lastError() const override;
     std::uint16_t lastWorkingCounter() const override;
+    std::uint16_t lastOutputWorkingCounter() const override;
+    std::uint16_t lastInputWorkingCounter() const override;
     MailboxDiagnostics mailboxDiagnostics() const;
     void resetMailboxDiagnostics();
     void setMailboxStatusMode(MailboxStatusMode mode);
@@ -160,6 +162,8 @@ private:
     std::uint32_t logicalAddress_ = 0;
     std::uint16_t expectedWorkingCounter_ = 1;
     std::uint16_t lastWorkingCounter_ = 0;
+    std::uint16_t lastOutputWorkingCounter_ = 0;
+    std::uint16_t lastInputWorkingCounter_ = 0;
     std::size_t maxFramesPerCycle_ = 128;
     bool redundancyEnabled_ = false;
     bool lastFrameUsedSecondary_ = false;
