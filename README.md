@@ -117,6 +117,33 @@ The demo loads configuration from:
 - `examples/config/beckhoff_devices.xml`
 - `examples/config/recovery_profile.json` (for recovery profile demo)
 
+### ENI/ESI relationship in this stack
+
+`beckhoff_demo.eni.xml` and `beckhoff_devices.xml` have different roles:
+
+- `beckhoff_demo.eni.xml` is the runtime topology + mapping contract:
+  - process image sizes (`<ProcessImage .../>`),
+  - expected slave list (`<Slave .../>`),
+  - logical signal bindings (`<Signal .../>`).
+- `beckhoff_devices.xml` is a lightweight ESI catalog used as identity metadata:
+  - maps device `name` -> `vendorId` + `productCode` (`<Device .../>` entries),
+  - can include many Beckhoff devices beyond one specific demo topology.
+
+How loading works (`ConfigurationLoader::loadFromEniAndEsiDirectory(...)`):
+
+1. Parse ENI first and build `NetworkConfiguration`.
+2. Scan all `*.xml` in the ESI directory and collect `<Device .../>`/`<Slave .../>` identity entries.
+3. Merge by slave `name`:
+   - only fill missing ENI identity fields (`vendorId`, `productCode`),
+   - ENI values win if they are already present/non-zero.
+4. Run configuration validation.
+
+Practical implication:
+
+- Edit ENI when you change actual mapped topology/signals.
+- Expand ESI catalog when you want better identity coverage for more device names.
+- ESI does not override signal byte/bit mapping from ENI.
+
 Real NIC demo (requires root and EtherCAT interface):
 
 ```bash
