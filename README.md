@@ -82,11 +82,15 @@ Artifacts are emitted in `build/` as `.deb` files, one for each component.
 ./build/physical_topology_scan_demo linux:eth0
 ./build/mailbox_soak_demo linux:eth0 1 0x1018 0x01 1000
 ./build/dc_hardware_sync_demo linux:eth0 1 500 10
+./build/dc_soak_demo linux:eth0 600 1000
 # JSON-lines mode for CI ingestion:
 OEC_SOAK_JSON=1 ./build/mailbox_soak_demo linux:eth0 1 0x1018 0x01 1000
 # DC demo JSON mode + safe correction limits:
 OEC_DC_SOAK_JSON=1 OEC_DC_MAX_CORR_STEP_NS=20000 OEC_DC_MAX_SLEW_NS=5000 \
   ./build/dc_hardware_sync_demo linux:eth0 1 500 10
+# DC soak KPI output (runtime + DC quality):
+OEC_SOAK_JSON=1 OEC_DC_CLOSED_LOOP=1 OEC_DC_SYNC_MONITOR=1 \
+  ./build/dc_soak_demo linux:eth0 600 1000
 # Enable closed-loop DC control directly in EthercatMaster::runCycle():
 OEC_DC_CLOSED_LOOP=1 OEC_DC_REFERENCE_SLAVE=1 OEC_DC_TARGET_PHASE_NS=0 \
 OEC_DC_KP=0.1 OEC_DC_KI=0.01 OEC_DC_CORRECTION_CLAMP_NS=20000 \
@@ -161,6 +165,7 @@ sudo OEC_TRACE_MAP=1 OEC_TRACE_WKC=1 OEC_TRACE_OUTPUT_VERIFY=1 \
 - `docs/ethercat-primer.md`: EtherCAT fundamentals, acronym glossary, and trace interpretation guide.
   Includes process-image structure diagrams and EL1004/EL2004 byte/bit mapping examples.
 - `docs/production-roadmap.md`: phased plan and acceptance gates for production readiness.
+- `docs/runtime-determinism.md`: RT scheduling/affinity/memory-lock guidance and Phase 2 KPI campaign recipe.
 
 ## Extension points
 

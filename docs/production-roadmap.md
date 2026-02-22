@@ -48,7 +48,7 @@ Status: Complete.
 
 ## Phase 2: Distributed clocks and deterministic runtime
 
-Status: In progress (hardware prototype started).
+Status: In progress (implementation largely complete; hardware KPI evidence pending).
 
 ### Scope
 
@@ -62,11 +62,13 @@ Status: In progress (hardware prototype started).
 
 - DC hardware integration module.
 - DC diagnostics counters and trend reporting.
-- `dc_soak_demo` for offset/jitter KPI collection.
+- `dc_soak_demo` for offset/jitter/cycle KPI collection.
+- Runtime determinism operating guide (`docs/runtime-determinism.md`).
 
 ### Acceptance gate
 
 - Jitter and offset metrics within target for selected cycle periods on reference hardware (x86 + RPi class).
+- Lock duty and policy-trigger behavior meet target profile under long-run soak.
 
 ## Phase 3: Topology, hot-connect, and redundancy
 
@@ -134,15 +136,14 @@ Status: Foundations exist; full campaign not complete.
 
 ## Immediate 30-day execution plan
 
-1. Finish Phase 1 remaining items:
-- emergency queue bounds + overflow reporting
-- timeout/error taxonomy
-- retry-exhaustion tests
-2. Start Phase 2 spike:
-- implement minimal DC register programming prototype on one reference chain
-- add KPI logging path
-3. Prepare Phase 3 test bench:
+1. Close Phase 2 acceptance with hardware evidence:
+- run `dc_soak_demo` campaigns on x86 + RPi (10m/1h/24h)
+- record and compare jitter/offset/lock KPIs for `1000us` and `2000us` periods
+2. Start Phase 3 validation bench:
 - scripted cable-break and slave power-cycle fault scenarios
+- redundancy switchover KPI capture (recover-to-OP budget)
+3. Prepare Phase 4 compatibility matrix:
+- add at least one non-Beckhoff slave class to the regression matrix
 
 ## Work tracking format
 

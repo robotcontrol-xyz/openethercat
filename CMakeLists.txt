@@ -96,6 +96,9 @@ if(OEC_BUILD_EXAMPLES)
 
     add_executable(dc_hardware_sync_demo examples/dc_hardware_sync_demo.cpp)
     target_link_libraries(dc_hardware_sync_demo PRIVATE openethercat)
+
+    add_executable(dc_soak_demo examples/dc_soak_demo.cpp)
+    target_link_libraries(dc_soak_demo PRIVATE openethercat)
 endif()
 
 if(OEC_BUILD_TESTS)
