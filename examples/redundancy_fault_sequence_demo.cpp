@@ -27,12 +27,14 @@ struct Step {
 void printStatus(const oec::EthercatMaster& master, std::size_t stepIndex, const char* label, bool jsonMode) {
     const auto s = master.redundancyStatus();
     const auto k = master.redundancyKpis();
+    const auto t = master.redundancyTransitions();
     if (jsonMode) {
         std::cout << "{\"type\":\"step\",\"step\":" << stepIndex
                   << ",\"label\":\"" << label << "\""
                   << ",\"redundancy_healthy\":" << (s.redundancyHealthy ? 1 : 0)
                   << ",\"state\":" << static_cast<int>(s.state)
                   << ",\"transitions\":" << s.transitionCount
+                  << ",\"timeline_events\":" << t.size()
                   << ",\"degrade_events\":" << k.degradeEvents
                   << ",\"recover_events\":" << k.recoverEvents
                   << ",\"impacted_cycles\":" << k.impactedCycles
@@ -46,6 +48,7 @@ void printStatus(const oec::EthercatMaster& master, std::size_t stepIndex, const
                   << " healthy=" << (s.redundancyHealthy ? 1 : 0)
                   << " state=" << static_cast<int>(s.state)
                   << " transitions=" << s.transitionCount
+                  << " timeline_events=" << t.size()
                   << " degrade_events=" << k.degradeEvents
                   << " recover_events=" << k.recoverEvents
                   << " impacted_cycles=" << k.impactedCycles
@@ -128,11 +131,13 @@ int main() {
 
     const auto status = master.redundancyStatus();
     const auto kpi = master.redundancyKpis();
+    const auto transitions = master.redundancyTransitions();
     if (jsonMode) {
         std::cout << "{\"type\":\"summary\""
                   << ",\"state\":" << static_cast<int>(status.state)
                   << ",\"healthy\":" << (status.redundancyHealthy ? 1 : 0)
                   << ",\"transitions\":" << status.transitionCount
+                  << ",\"timeline_events\":" << transitions.size()
                   << ",\"degrade_events\":" << kpi.degradeEvents
                   << ",\"recover_events\":" << kpi.recoverEvents
                   << ",\"impacted_cycles\":" << kpi.impactedCycles
@@ -145,6 +150,7 @@ int main() {
                   << " state=" << static_cast<int>(status.state)
                   << " healthy=" << (status.redundancyHealthy ? 1 : 0)
                   << " transitions=" << status.transitionCount
+                  << " timeline_events=" << transitions.size()
                   << " degrade_events=" << kpi.degradeEvents
                   << " recover_events=" << kpi.recoverEvents
                   << " impacted_cycles=" << kpi.impactedCycles
@@ -152,6 +158,17 @@ int main() {
                   << " last_policy_ms=" << kpi.lastPolicyTriggerLatencyMs
                   << " last_recovery_ms=" << kpi.lastRecoveryLatencyMs
                   << '\n';
+    }
+
+    if (!jsonMode) {
+        for (const auto& e : transitions) {
+            std::cout << "transition generation=" << e.topologyGeneration
+                      << " cycle=" << e.cycleIndex
+                      << " from=" << static_cast<int>(e.from)
+                      << " to=" << static_cast<int>(e.to)
+                      << " reason=" << e.reason
+                      << '\n';
+        }
     }
 
     master.stop();

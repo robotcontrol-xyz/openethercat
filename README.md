@@ -143,6 +143,7 @@ OEC_TOPOLOGY_MISSING_ACTION=degrade \
 # Redundancy policy controls:
 # OEC_TOPOLOGY_REDUNDANCY_GRACE=<cycles>
 # OEC_TOPOLOGY_REDUNDANCY_ACTION=monitor|retry|reconfigure|degrade|failstop
+# OEC_TOPOLOGY_REDUNDANCY_HISTORY=<N>   # transition timeline history depth (default 512)
 # Scripted redundancy fault sequence (timeline + KPIs):
 ./build/redundancy_fault_sequence_demo
 ```
@@ -178,6 +179,7 @@ sudo OEC_TRACE_MAP=1 OEC_TRACE_WKC=1 OEC_TRACE_OUTPUT_VERIFY=1 \
   Includes process-image structure diagrams and EL1004/EL2004 byte/bit mapping examples.
 - `docs/production-roadmap.md`: phased plan and acceptance gates for production readiness.
 - `docs/runtime-determinism.md`: RT scheduling/affinity/memory-lock guidance and Phase 2 KPI campaign recipe.
+- `docs/phase3-acceptance.md`: explicit Phase 3 software and physical validation checklist.
 
 ## Extension points
 

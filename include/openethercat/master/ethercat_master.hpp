@@ -165,6 +165,17 @@ public:
         std::int64_t lastRecoveryLatencyMs = -1;
         std::int64_t lastPolicyTriggerLatencyMs = -1;
     };
+    /**
+     * @brief One redundancy-state transition event for timeline analysis.
+     */
+    struct RedundancyTransitionEvent {
+        std::chrono::system_clock::time_point timestamp{};
+        std::uint64_t cycleIndex = 0;
+        std::uint64_t topologyGeneration = 0;
+        RedundancyState from = RedundancyState::PrimaryOnly;
+        RedundancyState to = RedundancyState::PrimaryOnly;
+        std::string reason;
+    };
 
     explicit EthercatMaster(ITransport& transport);
 
@@ -285,6 +296,8 @@ public:
     std::string lastError() const;
     RedundancyStatusSnapshot redundancyStatus() const;
     RedundancyKpiSnapshot redundancyKpis() const;
+    std::vector<RedundancyTransitionEvent> redundancyTransitions() const;
+    void clearRedundancyTransitions();
 
 private:
     struct DcClosedLoopOptions {
@@ -302,7 +315,8 @@ private:
                                      const std::vector<SlaveIdentity>& hotConnected,
                                      bool redundancyHealthy,
                                      std::uint64_t topologyGeneration);
-    void transitionRedundancyState(RedundancyState newState, const std::string& reason);
+    void transitionRedundancyState(RedundancyState newState, const std::string& reason,
+                                   std::uint64_t topologyGeneration);
     void updateDcSyncQualityLocked(std::int64_t phaseErrorNs);
     void applyDcPolicyLocked();
     void configureDcClosedLoopFromEnvironment();
@@ -352,6 +366,8 @@ private:
     std::chrono::steady_clock::time_point redundancyFaultStart_{};
     std::chrono::steady_clock::time_point redundancyRecoveryStart_{};
     bool redundancyFaultActive_ = false;
+    std::vector<RedundancyTransitionEvent> redundancyTransitions_;
+    std::size_t maxRedundancyTransitionHistory_ = 512U;
     bool degraded_ = false;
     std::string error_;
 };

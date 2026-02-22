@@ -241,6 +241,9 @@ int main() {
         const auto k1 = master.redundancyKpis();
         assert(k1.degradeEvents == 1U);
         assert(k1.lastPolicyTriggerLatencyMs >= 0);
+        const auto t1 = master.redundancyTransitions();
+        assert(!t1.empty());
+        assert(t1.front().to == oec::EthercatMaster::RedundancyState::RedundancyDegraded);
 
         // Recovery should reset latch and allow future trigger.
         transport.setRedundancyHealthy(true);
@@ -265,6 +268,14 @@ int main() {
         const auto k2 = master.redundancyKpis();
         assert(k2.degradeEvents == 2U);
         assert(k2.recoverEvents >= 1U);
+        const auto t2 = master.redundancyTransitions();
+        assert(t2.size() >= 4U);
+        assert(t2[t2.size() - 4U].to == oec::EthercatMaster::RedundancyState::RedundancyDegraded);
+        assert(t2[t2.size() - 3U].to == oec::EthercatMaster::RedundancyState::Recovering);
+        assert(t2[t2.size() - 2U].to == oec::EthercatMaster::RedundancyState::RedundantHealthy);
+        assert(t2[t2.size() - 1U].to == oec::EthercatMaster::RedundancyState::RedundancyDegraded);
+        master.clearRedundancyTransitions();
+        assert(master.redundancyTransitions().empty());
 
         master.stop();
     }

@@ -72,7 +72,7 @@ Status: In progress (implementation largely complete; hardware KPI evidence pend
 
 ## Phase 3: Topology, hot-connect, and redundancy
 
-Status: In progress (reconciliation change-set foundation added).
+Status: In progress (software validation harness complete; physical switchover campaigns pending).
 
 ### Scope
 
