@@ -1,5 +1,25 @@
 <EsiCatalog>
+  <!-- Couplers -->
   <Device name="EK1100" vendorId="0x00000002" productCode="0x044c2c52"/>
+
+  <!-- Digital input terminals -->
   <Device name="EL1004" vendorId="0x00000002" productCode="0x03ec3052"/>
+  <Device name="EL1008" vendorId="0x00000002" productCode="0x03f03052"/>
+  <Device name="EL1012" vendorId="0x00000002" productCode="0x03f43052"/>
+  <Device name="EL1014" vendorId="0x00000002" productCode="0x03f63052"/>
+  <Device name="EL1018" vendorId="0x00000002" productCode="0x03fa3052"/>
+  <Device name="EL1808" vendorId="0x00000002" productCode="0x07103052"/>
+  <Device name="EL1809" vendorId="0x00000002" productCode="0x07113052"/>
+
+  <!-- Digital output terminals -->
   <Device name="EL2004" vendorId="0x00000002" productCode="0x07d43052"/>
+  <Device name="EL2008" vendorId="0x00000002" productCode="0x07d83052"/>
+  <Device name="EL2022" vendorId="0x00000002" productCode="0x07e63052"/>
+  <Device name="EL2024" vendorId="0x00000002" productCode="0x07e83052"/>
+  <Device name="EL2028" vendorId="0x00000002" productCode="0x07ec3052"/>
+  <Device name="EL2808" vendorId="0x00000002" productCode="0x0af83052"/>
+
+  <!-- Bridge/fieldbus interface terminals -->
+  <Device name="EL6692" vendorId="0x00000002" productCode="0x1a243052"/>
+  <Device name="EL6751" vendorId="0x00000002" productCode="0x1a6f3052"/>
 </EsiCatalog>
