@@ -1,34 +1,37 @@
 # EtherCAT for Dummies
 
-Practical field guide to understanding EtherCAT technology and how it maps to this openEtherCAT stack.
+Practical technical guide to understanding EtherCAT technology and how it maps to this openEtherCAT stack.
 
 ## Who this is for
 
-- Software engineers building controls and industrial communication systems.
-- Automation engineers who want to understand what the master and slaves are doing internally.
-- Anyone using this repository and wanting a single end-to-end mental model.
+- Software engineers building industrial communication and control software.
+- Automation engineers doing EtherCAT bring-up and diagnostics.
+- Anyone using this repository who wants a full protocol-to-code mental model.
 
-## What this book covers
+## How to read this book
 
-1. EtherCAT in plain words.
-2. What happens inside the master.
-3. What happens inside a slave (ESC, SM, FMMU, AL state machine).
-4. Process data, mailbox traffic, and working counters.
-5. Distributed clocks, topology, and redundancy.
-6. How all of this maps directly to the openEtherCAT stack in this repo.
+- Read Chapters 1-5 first if you are new to EtherCAT.
+- Jump to Chapters 6-10 for implementation details.
+- Use Chapters 11-13 as a bring-up and troubleshooting handbook.
 
 ---
 
-## Chapter 1: EtherCAT in One Minute
+## Chapter 1: What EtherCAT Is (and Why It Is Fast)
 
-EtherCAT is an Ethernet-based fieldbus optimized for deterministic cyclic I/O.
+EtherCAT is an Ethernet-based fieldbus optimized for deterministic cyclic I/O. Its speed comes from "on-the-fly" frame processing:
 
-Core idea:
-- The master sends one frame.
-- Every slave reads/writes "its bytes" while the frame is passing through.
-- The frame returns quickly with all updates done.
+- Master emits an Ethernet frame carrying EtherCAT datagrams.
+- Each slave reads/writes only its mapped bytes while forwarding the frame immediately.
+- The frame returns with all slave data already embedded.
 
-Compared to classic request/response bus patterns, this is very efficient and low-latency for real-time control.
+This avoids per-slave request/response round trips.
+
+### Conceptual comparison
+
+- Traditional polling bus:
+  - `Master -> Slave1`, wait, `Master -> Slave2`, wait, ...
+- EtherCAT:
+  - single frame traverses full line, all nodes participate in one pass.
 
 ```mermaid
 flowchart LR
@@ -38,288 +41,357 @@ flowchart LR
     S3 --> M
 ```
 
+### Determinism perspective
+
+Determinism is achieved by combining:
+
+- predictable cyclic scheduling on master,
+- fixed process image layout,
+- strict state-machine transitions,
+- per-cycle datagram acknowledgements (WKC),
+- optional distributed clock synchronization.
+
 ---
 
-## Chapter 2: Big Picture Architecture
+## Chapter 2: EtherCAT Protocol Building Blocks
 
-At runtime there are two worlds:
+At wire level, this stack uses EtherType `0x88A4` (EtherCAT Ethernet frames).
 
-- Application world:
-  - your logical signals like `StartButton`, `LampGreen`, drive setpoints, status flags.
-- EtherCAT world:
-  - bytes and bits in process images and mailbox objects.
+Inside an EtherCAT frame are one or more datagrams. Key commands used in this stack:
 
-The stack bridges those worlds.
+- `LWR` logical write: master writes output process image.
+- `LRD` logical read: master reads input process image.
+- `APRD` auto-increment physical read: read slave ESC registers/memory by station position.
+- `APWR` auto-increment physical write: write slave ESC registers/memory.
+- `BRD/BWR` broadcast read/write: network-wide state operations.
+
+### Why both logical and physical access exist
+
+- Logical access (`LWR/LRD`): high-rate cyclic process data path.
+- Physical access (`APRD/APWR`): startup, diagnostics, SM/FMMU setup, AL state/status readouts.
+
+---
+
+## Chapter 3: Master Architecture in This Stack
+
+`oec::EthercatMaster` is the central facade. It coordinates:
+
+- configuration validation and mapping binding,
+- startup AL transitions,
+- cyclic exchange,
+- mailbox services,
+- diagnostics and recovery,
+- distributed clocks,
+- topology/redundancy supervision.
 
 ```mermaid
 flowchart TB
-    App[Application logic]
-    Map[Logical mapping]
-    Master[EtherCAT master runtime]
-    Wire[(EtherCAT line)]
-    Slaves[EtherCAT slaves]
+    App[Application]
+    Master[EthercatMaster]
+    Map[IoMapper]
+    Mailbox[CoE/FoE/EoE Services]
+    DC[DistributedClockController]
+    Topo[TopologyManager]
+    Transport[ITransport]
 
-    App --> Map
-    Map --> Master
-    Master --> Wire
-    Wire --> Slaves
-    Slaves --> Wire
-    Wire --> Master
+    App --> Master
     Master --> Map
-    Map --> App
+    Master --> Mailbox
+    Master --> DC
+    Master --> Topo
+    Master --> Transport
 ```
+
+### Startup sequence (high level)
+
+1. `configure(config)`:
+- validates process image sizes and logical bindings.
+
+2. `start()`:
+- opens transport,
+- transitions network through AL states,
+- configures process image mapping,
+- transitions to OP.
+
+### Cyclic sequence (high level)
+
+1. application updates outputs,
+2. `runCycle()` calls transport `exchange(...)`,
+3. transport performs `LWR` then `LRD`,
+4. master updates input image and dispatches callbacks,
+5. monitoring/policy layers may run (DC, topology, recovery).
 
 ---
 
-## Chapter 3: EtherCAT Master Side
+## Chapter 4: Inside a Slave (ESC, AL, SM, FMMU)
 
-The master has two jobs:
+A slave has an ESC (EtherCAT Slave Controller). Think of ESC as a real-time packet processor + register block.
 
-1. Startup/configuration:
-- Discover and validate expected chain.
-- Transition AL states (INIT -> PRE-OP -> SAFE-OP -> OP).
-- Configure process image mapping.
+## 4.1 AL state machine
 
-2. Cyclic operation:
-- Write outputs to slaves.
-- Read inputs from slaves.
-- Dispatch application callbacks.
-- Monitor errors and recover.
+- `INIT`: baseline initialization.
+- `PRE-OP`: mailbox communication available, process data typically not active.
+- `SAFE-OP`: inputs valid, outputs may be held safe.
+- `OP`: full cyclic process data active.
+- `BOOTSTRAP`: firmware/bootstrap mode for specialized workflows.
 
-In this stack, this is orchestrated by `oec::EthercatMaster`.
+## 4.2 Sync Managers (SM)
 
-### Master startup flow
+SMs define memory windows and direction:
 
-```mermaid
-sequenceDiagram
-    participant App
-    participant M as EthercatMaster
-    participant T as Transport
-    participant S as Slaves
+- `SM2`: usually RxPDO area (master -> slave outputs).
+- `SM3`: usually TxPDO area (slave -> master inputs).
 
-    App->>M: configure(config)
-    App->>M: start()
-    M->>T: open()
-    M->>T: requestNetworkState(INIT)
-    M->>T: requestNetworkState(PRE-OP)
-    M->>T: configureProcessImage(...)
-    M->>T: requestNetworkState(SAFE-OP)
-    M->>T: requestNetworkState(OP)
-```
+If `SM2` or `SM3` lengths are zero, PDO path may not be mapped/active.
 
-### Master cyclic flow
+## 4.3 FMMU
 
-```mermaid
-sequenceDiagram
-    participant App
-    participant M as EthercatMaster
-    participant T as LinuxRawSocketTransport
-    participant S as Slaves
+FMMU maps logical EtherCAT addresses to slave physical process RAM windows.
 
-    App->>M: setOutputByName(...)
-    App->>M: runCycle()
-    M->>T: exchange(txProcessImage, rxProcessImage)
-    T->>S: LWR (outputs)
-    S-->>T: LWR WKC
-    T->>S: LRD (inputs)
-    S-->>T: LRD WKC
-    T-->>M: rxProcessImage + per-datagram WKC
-    M->>M: dispatch input changes
-    M-->>App: callbacks / status
-```
+Practical meaning:
+
+- Master writes logical output region.
+- ESC routes to the corresponding slave output RAM area.
+- Master reads logical input region.
+- ESC exposes current slave input RAM area.
+
+Without valid SM+FMMU setup, cyclic IO appears broken even if wiring is correct.
 
 ---
 
-## Chapter 4: EtherCAT Slave Side (What a Slave Actually Does)
+## Chapter 5: Process Image and Logical Mapping
 
-A slave contains an ESC (EtherCAT Slave Controller).
+Process image is the contract between control application and field bus.
 
-Important ESC pieces:
-- AL state machine:
-  - INIT, PRE-OP, SAFE-OP, OP.
-- Sync Managers (SM):
-  - SM2 typically output PDO area (master -> slave).
-  - SM3 typically input PDO area (slave -> master).
-- FMMU:
-  - maps logical master addresses to physical ESC memory windows.
-- Mailbox channels:
-  - CoE/FoE/EoE acyclic communication.
+- Output process image: commanded outputs.
+- Input process image: measured inputs.
 
-### AL states in practice
+In this stack, logical app signals are mapped by `IoMapper`:
 
-- INIT:
-  - basic initialization.
-- PRE-OP:
-  - mailbox communication for configuration.
-- SAFE-OP:
-  - inputs valid; outputs often held safe.
-- OP:
-  - full cyclic data exchange active.
+- `logicalName` + direction + byte/bit offsets.
 
-### Why SM and FMMU matter
+### Example mapping
 
-- SM defines where process data lives inside the slave.
-- FMMU maps those windows into the master logical process image.
-- Without valid SM/FMMU mapping, cyclic datagrams can produce zero WKC.
+- `StartButton` -> input byte 0 bit N.
+- `LampGreen` -> output byte 0 bit N.
 
----
-
-## Chapter 5: Process Image (The Most Important Concept)
-
-Think of process image as shared cyclic byte arrays:
-
-- Output process image:
-  - command bytes from application to field.
-- Input process image:
-  - status bytes from field to application.
-
-In this stack:
-- `LWR` writes output image region.
-- `LRD` reads input image region.
+Same app code can be reused across hardware changes by updating mapping, not control logic.
 
 ```mermaid
 flowchart LR
-    subgraph MasterPI[Master process image]
-      O[Output bytes]
-      I[Input bytes]
-    end
-    O -->|LWR| SM2[Slave SM2 window]
-    SM3[Slave SM3 window] -->|LRD| I
+    AppSig[Logical signal] --> Mapper[IoMapper]
+    Mapper --> PI[Process image byte/bit]
+    PI --> EtherCAT[Datagrams]
+    EtherCAT --> ESC[Slave ESC SM/FMMU]
 ```
 
-For simple digital terminals:
-- one byte can represent several channels.
-- bit offsets map channels (`bit0` -> CH1, etc.).
-
 ---
 
-## Chapter 6: Working Counter (WKC) Without Confusion
+## Chapter 6: Working Counter (WKC) Correct Interpretation
 
-WKC tells how many addressed operations were accepted/processed by slaves for that datagram.
+WKC indicates how many addressed slave operations were accepted for a datagram.
 
-Key rule:
-- Interpret WKC per datagram.
+Critical point: WKC is datagram-specific.
 
 In this stack:
-- `wkc_lwr` is output write datagram WKC.
-- `wkc_lrd` is input read datagram WKC.
-- `wkc_sum = wkc_lwr + wkc_lrd` is a convenience number, not a protocol field.
 
-Important nuance:
-- A coupler like EK1100 does not necessarily increment cyclic PDO WKC unless it participates in that logical mapping.
-- So with one output terminal and one input terminal, it is normal to see:
-  - `wkc_lwr=1`, `wkc_lrd=1`.
+- `wkc_lwr`: WKC for output write (`LWR`).
+- `wkc_lrd`: WKC for input read (`LRD`).
+- `wkc_sum`: convenience sum for quick view.
+
+### Why `wkc=1` can be correct with multiple slaves
+
+If only one output slave participates in mapped output window and one input slave in mapped input window:
+
+- `wkc_lwr=1`, `wkc_lrd=1` can be perfectly valid.
+
+A coupler (e.g., EK1100) may not increment cyclic PDO WKC unless it participates in that logical datagram operation.
+
+### Failure heuristics
+
+- `wkc_lwr=0`: output mapping/path/state issue.
+- `wkc_lrd=0`: input mapping/path/state issue.
+- intermittent drops: wiring/noise/link/load/scheduling issues.
 
 ---
 
-## Chapter 7: Mailbox Protocols (CoE/FoE/EoE)
+## Chapter 7: Mailbox Plane (CoE, FoE, EoE)
 
-Cyclic PDO traffic is for real-time data.
-Mailbox traffic is for acyclic services:
+Mailbox is acyclic service traffic. It complements, not replaces, cyclic PDO flow.
 
-- CoE:
-  - SDO upload/download, PDO assignment/configuration, emergency objects.
-- FoE:
-  - file transfer (for example firmware workflows).
-- EoE:
-  - Ethernet over EtherCAT tunneling.
+## 7.1 CoE
+
+Used for object dictionary operations:
+
+- SDO upload/download,
+- PDO assignment/mapping programming,
+- emergency objects.
 
 In this stack:
-- `sdoUpload`, `sdoDownload`, `configureRxPdo`, `configureTxPdo`.
-- emergency queue drain API.
-- FoE/EoE service APIs.
 
-Robustness features implemented include:
-- strict response matching (index/subindex/toggle/counter checks),
-- retry/backoff,
-- stale frame filtering,
-- diagnostics counters.
+- `sdoUpload(...)`, `sdoDownload(...)`,
+- `configureRxPdo(...)`, `configureTxPdo(...)`,
+- emergency queue drain APIs.
+
+## 7.2 FoE and EoE
+
+- `FoE`: file transfer semantics (for example firmware payload flows).
+- `EoE`: Ethernet-over-EtherCAT encapsulated frame path.
+
+## 7.3 Robustness behavior implemented here
+
+- strict mailbox response correlation,
+- retry + backoff policy,
+- stale/unrelated frame filtering,
+- emergency frame handling during waits,
+- error class counters for KPI analysis.
 
 ---
 
-## Chapter 8: Distributed Clocks (DC)
+## Chapter 8: Distributed Clocks (DC) and Time Quality
 
-DC aligns timing across distributed slaves for deterministic phase behavior.
+Distributed clocks synchronize timing reference across slaves and master control loop.
 
-The stack includes:
-- PI controller for correction.
-- quality monitor with lock/loss tracking and jitter stats.
-- policy actions on out-of-window conditions.
+This stack includes:
 
-Runtime knobs include:
+- PI correction controller,
+- correction clamps and slew limiting,
+- lock/loss supervision,
+- out-of-window policy actions,
+- runtime trace/telemetry hooks.
+
+### Control concepts
+
+- phase error: `referenceTime - localTime`.
+- filtered error: low-pass or exponential smoothing before control action.
+- correction output: bounded control effort to avoid unstable steps.
+
+### Runtime knobs (selected)
+
 - `OEC_DC_CLOSED_LOOP`
-- `OEC_DC_KP`, `OEC_DC_KI`
+- `OEC_DC_KP`, `OEC_DC_KI`, `OEC_DC_FILTER_ALPHA`
+- `OEC_DC_CORRECTION_CLAMP_NS`
 - `OEC_DC_MAX_CORR_STEP_NS`, `OEC_DC_MAX_SLEW_NS`
 - `OEC_DC_SYNC_MONITOR`, `OEC_DC_SYNC_ACTION`
 
-Use:
-- `dc_hardware_sync_demo` for focused DC behavior.
-- `dc_soak_demo` for longer KPI collection.
+### Relevant demos
+
+- `dc_hardware_sync_demo`: focused DC register/control exploration.
+- `dc_soak_demo`: long-run timing + lock/jitter KPI collection.
 
 ---
 
-## Chapter 9: Topology, Hot-Connect, and Redundancy
+## Chapter 9: Topology Reconciliation and Change Sets
 
-Topology handling has two levels:
+Topology is not static in production: cable faults, module swaps, power cycles, hot-connect events can happen.
 
-1. Snapshot + diff:
-- current discovered slaves
-- deterministic change sets (`added/removed/updated`)
-- generation counter
+This stack provides deterministic topology snapshots and deltas:
 
-2. Policy execution:
-- grace cycles
-- actions (`monitor`, `retry`, `reconfigure`, `degrade`, `failstop`)
-- latching (avoid repeated triggers during sustained faults)
+- `topologySnapshot()`
+- `topologyChangeSet()`
+- `topologyGeneration()`
 
-Redundancy observability:
-- current redundancy state
-- KPI counters/latencies
-- transition timeline history
+Change set fields capture:
+
+- `added` slaves,
+- `removed` slaves,
+- `updated` slave properties/state,
+- redundancy health transition.
+
+Generation gives monotonic ordering and easier event correlation.
+
+---
+
+## Chapter 10: Topology Policy and Redundancy Supervision
+
+Beyond detection, production systems need policy execution.
+
+`TopologyRecoveryOptions` supports:
+
+- grace cycles (debounce/noise filtering),
+- per-condition actions:
+  - `Monitor`
+  - `Retry`
+  - `Reconfigure`
+  - `Degrade`
+  - `FailStop`
+
+Conditions include:
+
+- missing expected slaves,
+- unexpected hot-connected slaves,
+- redundancy down state.
+
+### Redundancy states in this stack
+
+- `PrimaryOnly`
+- `RedundantHealthy`
+- `RedundancyDegraded`
+- `Recovering`
 
 ```mermaid
 stateDiagram-v2
     [*] --> PrimaryOnly
-    PrimaryOnly --> RedundantHealthy
-    RedundantHealthy --> RedundancyDegraded: link fault
+    PrimaryOnly --> RedundantHealthy: healthy topology
+    RedundantHealthy --> RedundancyDegraded: link fault detected
     RedundancyDegraded --> Recovering: link restored
     Recovering --> RedundantHealthy: stabilized
 ```
 
+### Observability APIs
+
+- `redundancyStatus()`
+- `redundancyKpis()`
+- `redundancyTransitions()` (timeline events)
+
 ---
 
-## Chapter 10: How This Maps to Your Stack (Concrete API)
+## Chapter 11: Concrete API Cookbook (This Stack)
 
-### Core runtime
+## 11.1 Master lifecycle
 
 ```cpp
 oec::EthercatMaster master(*transport);
-master.configure(config);
-master.start();
+if (!master.configure(config)) {
+    // inspect master.lastError()
+}
+if (!master.start()) {
+    // inspect master.lastError()
+}
 while (running) {
-    master.runCycle();
+    if (!master.runCycle()) {
+        // inspect master.lastError(), recoveryEvents(), diagnostics
+        break;
+    }
 }
 master.stop();
 ```
 
-### Logical signal mapping
+## 11.2 Logical IO mapping usage
 
 ```cpp
-master.onInputChange("StartButton", [&](bool s) {
-    master.setOutputByName("LampGreen", s);
+master.onInputChange("StartButton", [&](bool state) {
+    master.setOutputByName("LampGreen", state);
 });
 ```
 
-### Mailbox services
+## 11.3 Mailbox usage
 
 ```cpp
 auto wr = master.sdoDownload(2, {.index=0x2000, .subIndex=1}, {0x12, 0x34});
 auto rd = master.sdoUpload(2, {.index=0x2000, .subIndex=1});
+auto em = master.drainEmergencies(32);
 ```
 
-### Topology and redundancy
+## 11.4 Topology and redundancy usage
 
 ```cpp
+oec::EthercatMaster::TopologyRecoveryOptions opts;
+opts.enable = true;
+opts.redundancyGraceCycles = 2;
+opts.redundancyAction = oec::EthercatMaster::TopologyPolicyAction::Degrade;
+master.setTopologyRecoveryOptions(opts);
+
 std::string err;
 if (master.refreshTopology(err)) {
     auto delta = master.topologyChangeSet();
@@ -330,45 +402,78 @@ if (master.refreshTopology(err)) {
 }
 ```
 
----
+## 11.5 DC quality usage
 
-## Chapter 11: Common Bring-up Mistakes
-
-1. Treating one WKC number as "total bus health":
-- always inspect per datagram (`LWR` vs `LRD`).
-
-2. Assuming every slave increments cyclic WKC:
-- only slaves that process that datagram contribute.
-
-3. Forgetting AL state readiness:
-- PRE-OP/SAFE-OP/OP transitions matter.
-
-4. Ignoring power/wiring reality:
-- process RAM may update while output field power path is missing.
-
-5. Mixing cyclic and mailbox expectations:
-- PDO and mailbox flows have different timing/semantics.
+```cpp
+auto corr = master.updateDistributedClock(referenceNs, localNs);
+auto dcStats = master.distributedClockStats();
+auto dcQual = master.distributedClockQuality();
+```
 
 ---
 
-## Chapter 12: Practical Learning Path
+## Chapter 12: Bring-Up and Troubleshooting Playbook
 
-Run these in order:
+## 12.1 First hardware bring-up checklist
+
+1. Scan topology and verify slave identities/states.
+2. Verify process image mapping (`SM2/SM3`, FMMU traces).
+3. Verify datagram-level WKC (`LWR` and `LRD` separately).
+4. Verify physical output RAM readback vs command (`OEC_TRACE_OUTPUT_VERIFY`).
+5. Verify field-side wiring and power if command path looks correct.
+
+## 12.2 High-value trace knobs
+
+- Mapping and cyclic diagnostics:
+  - `OEC_TRACE_MAP=1`
+  - `OEC_TRACE_WKC=1`
+  - `OEC_TRACE_OUTPUT_VERIFY=1`
+- DC:
+  - `OEC_TRACE_DC=1`
+  - `OEC_TRACE_DC_QUALITY=1`
+  - `OEC_DC_QUALITY_JSON=1`
+- Topology/redundancy policy:
+  - `OEC_TOPOLOGY_POLICY_ENABLE=1`
+  - `OEC_TOPOLOGY_*_GRACE`
+  - `OEC_TOPOLOGY_*_ACTION`
+  - `OEC_TOPOLOGY_REDUNDANCY_HISTORY`
+
+## 12.3 Typical root causes
+
+- WKC zeros:
+  - AL state not OP,
+  - no valid SM/FMMU mapping,
+  - wrong logical offsets/sizes,
+  - link issues.
+- Mailbox timeouts:
+  - status gating mismatch across ESC variants,
+  - noisy/stale mailbox traffic,
+  - insufficient timeout/backoff.
+- Output appears toggled in app but not physical field:
+  - field power path/wiring issues,
+  - wrong channel mapping,
+  - slave state not allowing output.
+
+---
+
+## Chapter 13: Suggested Learning and Validation Path
 
 1. `physical_topology_scan_demo`
-- identify slaves and AL states.
+- understand chain composition and AL states.
 
-2. `beckhoff_io_demo` in mock and then Linux mode.
-- understand logical mapping and cyclic flow.
+2. `beckhoff_io_demo` (`mock` then Linux)
+- understand mapping, callbacks, cyclic IO, and WKC semantics.
 
 3. `mailbox_soak_demo`
-- understand mailbox robustness and diagnostics.
+- understand SDO robustness under noisy mailbox conditions.
 
 4. `dc_hardware_sync_demo` then `dc_soak_demo`
-- understand timing control and quality KPIs.
+- understand DC control behavior and KPI capture.
 
 5. `topology_reconcile_demo` and `redundancy_fault_sequence_demo`
-- understand phase-3 topology/redundancy behavior.
+- understand deterministic change sets, policy execution, and transition timelines.
+
+6. Apply `docs/runtime-determinism.md` and `docs/phase3-acceptance.md` on real hardware.
 
 ---
 
@@ -376,23 +481,21 @@ Run these in order:
 
 - ESC: EtherCAT Slave Controller.
 - AL: Application Layer state machine.
-- SM: Sync Manager process/mailbox windows.
-- FMMU: logical-to-physical memory mapping unit.
+- SM: Sync Manager windows.
+- FMMU: logical-to-physical address mapping unit.
 - PDO: cyclic process data object.
-- CoE/SDO: acyclic object dictionary service.
-- WKC: working counter per datagram.
-- DC: distributed clocks synchronization.
+- CoE/SDO: mailbox object dictionary communication.
+- WKC: datagram working counter.
+- DC: distributed clock synchronization.
 
 ---
 
 ## Final Note
 
-EtherCAT mastery comes from combining:
-- protocol-level understanding,
-- deterministic software design,
-- and disciplined hardware validation.
+Production EtherCAT systems succeed when architecture, protocol correctness, and hardware validation are treated as one system.
 
-This stack gives you all three building blocks:
-- clean C++ architecture,
-- production-hardening hooks,
-- and practical demos/tests for iterative learning.
+This stack now gives you:
+
+- clean and extensible C++ master architecture,
+- robust mailbox/DC/topology/redundancy software mechanisms,
+- and practical demos/tests/docs to move from bring-up to production validation.
